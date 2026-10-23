@@ -32,6 +32,7 @@ class LeadOut(BaseModel):
     status: str
     parsed: dict | None = None
     decision: dict | None = None
+    error: str | None = None
     created_at: datetime
 
 
@@ -43,6 +44,7 @@ def _to_out(rec: LeadRecord) -> LeadOut:
         status=rec.status,
         parsed=rec.parsed,
         decision=rec.decision,
+        error=rec.error,
         created_at=rec.created_at,
     )
 

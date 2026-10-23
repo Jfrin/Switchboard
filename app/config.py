@@ -15,6 +15,9 @@ class Settings(BaseSettings):
 
     crm_mode: str = "mock"  # hubspot | mock
     hubspot_token: str = ""
+    hubspot_portal_id: str = ""  # only used to build deal links for Slack
+    hubspot_pipeline: str = "default"
+    hubspot_deal_stage: str = "appointmentscheduled"
 
     enrichment_provider: str = "mock"  # apollo | hunter | mock
     apollo_api_key: str = ""

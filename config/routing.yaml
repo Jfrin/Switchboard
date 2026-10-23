@@ -13,3 +13,12 @@ territories:
   AMER: [US, CA, BR]
 
 fallback_queue: review
+
+# Used when CRM_MODE=hubspot: rep name -> HubSpot owner id.
+# Find ids with GET /crm/v3/owners (or the owners list in your HubSpot account).
+# Reps without an entry still get routed; the HubSpot owner is just left unset.
+hubspot_owner_ids: {}
+#  alice: "11111111"
+#  bob: "22222222"
+#  carol: "33333333"
+#  dave: "44444444"

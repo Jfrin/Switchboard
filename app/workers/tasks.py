@@ -5,7 +5,7 @@ from app.db.models import LeadRecord, RoutingDecision
 from app.db.session import SessionLocal
 from app.enrichment import enrich
 from app.extraction.extractor import LLMUnavailable, extract_lead
-from app.integrations.crm import get_crm
+from app.integrations.crm import CRMUnavailable, get_crm
 from app.integrations.slack import notify
 from app.routing.engine import load_rules, route
 from app.routing.round_robin import make_db_picker
@@ -37,14 +37,29 @@ def run_pipeline(lead_id: str) -> None:
             pick_rep=make_db_picker(db),
         )
 
+        deal_id = deal_url = None
         if decision.rep and lead.email:
+            first, _, last = (lead.name or "").partition(" ")
             crm = get_crm()
-            contact_id = crm.upsert_contact(lead.email, {"company": lead.company})
-            crm.create_deal(contact_id, f"{lead.company or lead.domain} inquiry", decision.rep)
+            contact_id = crm.upsert_contact(
+                lead.email,
+                {
+                    "firstname": first,
+                    "lastname": last,
+                    "company": lead.company,
+                    "jobtitle": lead.role,
+                    "phone": lead.phone,
+                },
+                owner=decision.rep,
+            )
+            deal_id = crm.create_deal(
+                contact_id, f"{lead.company or lead.domain} inquiry", owner=decision.rep
+            )
+            deal_url = crm.deal_url(deal_id)
 
         rec.parsed = lead.model_dump()
         rec.enrichment = enrichment
-        rec.decision = {**decision.to_dict(), "rep": decision.rep}
+        rec.decision = {**decision.to_dict(), "deal_id": deal_id}
         rec.status = "review" if decision.rep is None else "routed"
         db.add(
             RoutingDecision(
@@ -56,11 +71,15 @@ def run_pipeline(lead_id: str) -> None:
         )
         db.commit()
 
-        notify(
-            f"New lead: {lead.company or lead.email} | intent={lead.intent} "
+        size = f"{employees} employees" if employees else "size unknown"
+        message = (
+            f"New lead: {lead.company or lead.email} ({size}) | intent={lead.intent} "
             f"urgency={lead.urgency} | assigned={decision.rep or 'review queue'} "
             f"({decision.rule})"
         )
+        if deal_url:
+            message += f" | {deal_url}"
+        notify(message)
 
 
 def mark_failed(lead_id: str, error: str) -> None:
@@ -72,7 +91,7 @@ def mark_failed(lead_id: str, error: str) -> None:
             db.commit()
 
 
-RETRYABLE = (ConnectionError, TimeoutError, LLMUnavailable)
+RETRYABLE = (ConnectionError, TimeoutError, LLMUnavailable, CRMUnavailable)
 
 
 @celery_app.task(name="process_lead", bind=True, max_retries=5)
