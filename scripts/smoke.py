@@ -23,7 +23,14 @@ def main() -> None:
         print(json.dumps(httpx.get(f"{API}/leads").json(), indent=2))
         return
 
-    print("health:", httpx.get(f"{API}/health").json())
+    for _ in range(30):  # the api runs migrations before it starts listening
+        try:
+            print("health:", httpx.get(f"{API}/health").json())
+            break
+        except httpx.TransportError:
+            time.sleep(1)
+    else:
+        sys.exit("API did not come up within 30s; check: docker compose logs api")
     res = httpx.post(f"{API}/leads", json=SAMPLE)
     res.raise_for_status()
     lead_id = res.json()["id"]

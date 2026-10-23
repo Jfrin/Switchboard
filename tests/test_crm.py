@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 
-from app.integrations.crm import CRMUnavailable, HubSpotCRM, MockCRM
+from app.integrations.crm import CRMUnavailable, HubSpotCRM, MockCRM, parse_owner_ids
 
 OWNERS = {"alice": "555"}
 
@@ -117,3 +117,17 @@ def test_mock_crm_is_idempotent_on_email():
     deal_id = crm.create_deal(first, "Acme inquiry", owner="alice")
     assert crm.deals[0]["contact"] == first
     assert crm.deal_url(deal_id) == f"mock://deals/{deal_id}"
+
+
+def test_default_owner_covers_reps_without_a_mapping():
+    crm, calls = make_crm([(201, {"id": "d1"}), (201, {"id": "d2"})],
+                          owners={"alice": "555"}, default_owner="999")
+    crm.create_deal("1", "a", owner="alice")
+    crm.create_deal("1", "b", owner="bob")
+    assert body_of(calls[0])["properties"]["hubspot_owner_id"] == "555"
+    assert body_of(calls[1])["properties"]["hubspot_owner_id"] == "999"
+
+
+def test_parse_owner_ids():
+    assert parse_owner_ids("alice=1, bob = 2,junk,=3,carol=") == {"alice": "1", "bob": "2"}
+    assert parse_owner_ids("") == {}

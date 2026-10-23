@@ -22,19 +22,22 @@ FIELDS = ["company", "intent", "country"]
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--file", default="dataset.jsonl", help="dataset inside eval/")
     args = ap.parse_args()
 
     settings = get_settings()
     rules = load_rules(settings.routing_config_path)
-    path = ROOT / "dataset.jsonl"
-    rows = [json.loads(line) for line in path.read_text().splitlines() if line]
+    path = ROOT / args.file
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
     rows = rows[: args.limit]
+    results_name = "results.md" if args.file == "dataset.jsonl" else f"results-{path.stem}.md"
 
     field_hits: dict[str, int] = defaultdict(int)
     confusion: Counter[tuple[str, str]] = Counter()
     team_hits = 0
     errors = 0
     misses: list[str] = []
+    field_misses: list[str] = []
 
     for i, row in enumerate(rows, 1):
         print(f"[{i}/{len(rows)}] {row['from']}", flush=True)
@@ -55,7 +58,10 @@ def main() -> None:
         )
         exp = row["expected"]
         for f in FIELDS:
-            field_hits[f] += getattr(lead, f) == exp[f]
+            got = getattr(lead, f)
+            field_hits[f] += got == exp[f]
+            if got != exp[f]:
+                field_misses.append(f"- {row['from']}: {f} expected {exp[f]!r}, got {got!r}")
         confusion[(exp["team"], decision.team)] += 1
         if decision.team == exp["team"]:
             team_hits += 1
@@ -76,10 +82,12 @@ def main() -> None:
     lines += ["", f"## Routing accuracy: {team_hits / n:.1%}", ""]
     lines += ["## Confusion (expected -> got)", ""]
     lines += [f"- {e} -> {g}: {c}" for (e, g), c in sorted(confusion.items())]
+    if field_misses:
+        lines += ["", "## Extraction misses", ""] + field_misses
     if misses:
         lines += ["", "## Routing misses", ""] + misses
     out = "\n".join(lines) + "\n"
-    (ROOT / "results.md").write_text(out)
+    (ROOT / results_name).write_text(out, encoding="utf-8")
     print(out)
 
 

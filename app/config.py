@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     hubspot_portal_id: str = ""  # only used to build deal links for Slack
     hubspot_pipeline: str = "default"
     hubspot_deal_stage: str = "appointmentscheduled"
+    # "alice=123,bob=456" maps a rep to a HubSpot owner id; the default covers any other rep.
+    hubspot_owner_ids: str = ""
+    hubspot_default_owner_id: str = ""
 
     enrichment_provider: str = "mock"  # apollo | hunter | mock
     apollo_api_key: str = ""

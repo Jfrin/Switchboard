@@ -1,17 +1,17 @@
 # Evaluation results
 
-Samples evaluated: 20 (skipped on LLM error: 0)
+Samples evaluated: 138 (skipped on LLM error: 0)
 
 ## Extraction accuracy
 
 - company: 100.0%
-- intent: 100.0%
+- intent: 97.8%
 - country: 100.0%
 
 ## Routing accuracy: 100.0%
 
 ## Confusion (expected -> got)
 
-- enterprise -> enterprise: 4
-- review -> review: 7
-- smb -> smb: 9
+- enterprise -> enterprise: 45
+- review -> review: 45
+- smb -> smb: 48

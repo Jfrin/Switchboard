@@ -24,7 +24,7 @@ def run_pipeline(lead_id: str) -> None:
         db.commit()
 
         lead = extract_lead(rec.sender, rec.subject, rec.body)
-        enrichment = enrich(lead.domain)
+        enrichment = enrich(lead.domain, db)
         country = lead.country or enrichment.get("country")
         employees = lead.employee_count or enrichment.get("employee_count")
 

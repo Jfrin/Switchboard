@@ -13,6 +13,12 @@ HUBSPOT_API = "https://api.hubapi.com"
 DEAL_TO_CONTACT = 3  # HubSpot-defined association type id: deal -> contact
 
 
+def parse_owner_ids(raw: str) -> dict[str, str]:
+    """Parse 'alice=123,bob=456' into {'alice': '123', 'bob': '456'}."""
+    pairs = (item.split("=", 1) for item in raw.split(",") if "=" in item)
+    return {rep.strip(): owner.strip() for rep, owner in pairs if rep.strip() and owner.strip()}
+
+
 class CRMUnavailable(Exception):
     """Transient CRM failure (429, 5xx or network). The worker retries the task."""
 
@@ -64,12 +70,14 @@ class HubSpotCRM:
         token: str,
         portal_id: str = "",
         owners: dict[str, str] | None = None,
+        default_owner: str = "",
         pipeline: str = "default",
         deal_stage: str = "appointmentscheduled",
         client: httpx.Client | None = None,
     ) -> None:
         self.portal_id = portal_id
         self.owners = owners or {}
+        self.default_owner = default_owner
         self.pipeline = pipeline
         self.deal_stage = deal_stage
         self.http = client or httpx.Client(base_url=HUBSPOT_API, timeout=15)
@@ -95,9 +103,9 @@ class HubSpotCRM:
     def _owner_id(self, rep: str | None) -> str | None:
         if not rep:
             return None
-        owner_id = self.owners.get(rep)
+        owner_id = self.owners.get(rep) or self.default_owner or None
         if owner_id is None:
-            log.warning("no hubspot_owner_ids entry for rep %r; leaving owner unset", rep)
+            log.warning("no HubSpot owner id for rep %r; leaving owner unset", rep)
         return owner_id
 
     # -- API -----------------------------------------------------------------
@@ -171,10 +179,12 @@ def _hubspot() -> HubSpotCRM:
     if not s.hubspot_token:
         raise RuntimeError("CRM_MODE=hubspot but HUBSPOT_TOKEN is empty")
     owners = load_rules(s.routing_config_path).get("hubspot_owner_ids") or {}
+    owners = {**owners, **parse_owner_ids(s.hubspot_owner_ids)}
     return HubSpotCRM(
         s.hubspot_token,
         s.hubspot_portal_id,
         owners,
+        default_owner=s.hubspot_default_owner_id,
         pipeline=s.hubspot_pipeline,
         deal_stage=s.hubspot_deal_stage,
     )
