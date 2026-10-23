@@ -1,0 +1,15 @@
+teams:
+  smb:
+    reps: [alice, bob]
+  enterprise:
+    reps: [carol, dave]
+
+segments:
+  enterprise_min_employees: 500
+
+territories:
+  APAC: [SG, PH, AU, JP]
+  EMEA: [GB, DE, FR]
+  AMER: [US, CA, BR]
+
+fallback_queue: review

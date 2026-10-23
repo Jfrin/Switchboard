@@ -1,0 +1,4 @@
+{"from": "jane.doe@acme.com", "subject": "Pricing for 200 seats", "body": "Hi, we are a logistics company in Singapore looking for pricing on 200 seats.", "expected": {"company": "Acme", "intent": "pricing", "country": "SG", "team": "smb"}}
+{"from": "cto@bigcorp.com", "subject": "Enterprise rollout", "body": "We are BigCorp, 5000 employees across the US. Need a demo ASAP.", "expected": {"company": "BigCorp", "intent": "demo", "country": "US", "team": "enterprise"}}
+{"from": "someone@gmail.com", "subject": "hi", "body": "interested", "expected": {"company": null, "intent": "other", "country": null, "team": "review"}}
+{"from": "promo@cheap-seo.biz", "subject": "RANK #1 ON GOOGLE", "body": "Buy our SEO packages now!!!", "expected": {"company": null, "intent": "spam", "country": null, "team": "review"}}
