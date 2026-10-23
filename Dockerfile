@@ -12,6 +12,7 @@ RUN pip install -e ".[dev]"
 
 COPY config ./config
 COPY eval ./eval
+COPY scripts ./scripts
 COPY tests ./tests
 COPY alembic.ini ./
 COPY migrations ./migrations

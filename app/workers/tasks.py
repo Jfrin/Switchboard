@@ -63,11 +63,26 @@ def run_pipeline(lead_id: str) -> None:
         )
 
 
-@celery_app.task(
-    name="process_lead",
-    autoretry_for=(ConnectionError, TimeoutError, LLMUnavailable),
-    retry_backoff=True,
-    max_retries=5,
-)
-def process_lead(lead_id: str) -> None:
-    run_pipeline(lead_id)
+def mark_failed(lead_id: str, error: str) -> None:
+    with SessionLocal() as db:
+        rec = db.get(LeadRecord, lead_id)
+        if rec is not None:
+            rec.status = "failed"
+            rec.error = error[:2000]
+            db.commit()
+
+
+RETRYABLE = (ConnectionError, TimeoutError, LLMUnavailable)
+
+
+@celery_app.task(name="process_lead", bind=True, max_retries=5)
+def process_lead(self, lead_id: str) -> None:
+    try:
+        run_pipeline(lead_id)
+    except RETRYABLE as exc:
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc, countdown=2**self.request.retries) from exc
+        mark_failed(lead_id, str(exc))
+    except Exception as exc:
+        log.exception("lead %s failed", lead_id)
+        mark_failed(lead_id, f"{type(exc).__name__}: {exc}")

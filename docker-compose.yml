@@ -8,6 +8,9 @@ services:
     volumes:
       - ./app:/srv/app
       - ./config:/srv/config
+      - ./tests:/srv/tests
+      - ./eval:/srv/eval
+      - ./scripts:/srv/scripts
     depends_on:
       postgres:
         condition: service_healthy

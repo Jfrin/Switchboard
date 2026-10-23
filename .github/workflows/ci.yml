@@ -10,17 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install
-        run: pip install -e ".[dev]"
+      - name: Prepare env
+        run: cp .env.example .env
+      - name: Build image
+        run: docker compose build api
       - name: Lint
-        run: ruff check .
+        run: docker compose run --rm --no-deps api ruff check app tests eval migrations scripts
       - name: Test
-        run: pytest -q
-        env:
-          DATABASE_URL: sqlite+pysqlite:///:memory:
-          CRM_MODE: mock
-          ENRICHMENT_PROVIDER: mock
+        run: docker compose run --rm --no-deps api pytest -q
