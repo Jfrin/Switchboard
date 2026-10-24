@@ -27,3 +27,4 @@ redis_data/
 .idea/
 .DS_Store
 eval/.cache/
+RELEASE_NOTES.md
