@@ -1,0 +1,18 @@
+apiVersion: 1
+
+datasources:
+  - name: Switchboard Postgres
+    uid: switchboard-pg
+    type: grafana-postgresql-datasource
+    access: proxy
+    url: postgres:5432
+    user: switchboard
+    isDefault: true
+    editable: false
+    jsonData:
+      database: switchboard
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
+    secureJsonData:
+      password: switchboard

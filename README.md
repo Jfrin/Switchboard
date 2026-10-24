@@ -111,6 +111,8 @@ Environment variables (see `.env.example`):
 | `HUBSPOT_DEFAULT_OWNER_ID` / `HUBSPOT_OWNER_IDS` | Deal owner ids (`alice=123,bob=456` for per-rep) |
 | `SLACK_WEBHOOK_URL` | Slack incoming webhook |
 | `ENRICHMENT_PROVIDER` | `mock` (Apollo/Hunter not implemented yet) |
+| `LOG_FORMAT` / `LOG_LEVEL` | `json` (default) or `text`; log level (default `INFO`) |
+| `GRAFANA_ADMIN_PASSWORD` | Admin password for the optional Grafana service (default `admin`) |
 | `CONFIDENCE_THRESHOLD` | Below this, leads go to the review queue (default `0.7`) |
 
 ### Choosing models
@@ -173,7 +175,7 @@ docker compose up -d --build                      # start everything
 docker compose up -d --build --force-recreate api worker   # after changing .env or code
 docker compose ps                                 # what is running
 docker compose logs api --tail 50                 # API log
-docker compose logs worker --tail 50              # worker log (LLM and HubSpot calls)
+docker compose logs worker --tail 50              # worker log (JSON, one line per event)
 docker compose down                               # stop (add -v to wipe the database)
 docker compose exec api alembic upgrade head      # run migrations by hand
 docker compose exec api alembic current           # show migration version
@@ -250,6 +252,32 @@ Larger batches use fewer requests but can lower accuracy. Compare sizes on the s
 
 Reporting rules: tune on dev only, report the held-out test number with the model that produced it, and call everything synthetic or hand-written unless real data is added.
 
+## Observability
+
+**Dashboard (optional).** Grafana reads Postgres directly and ships with a provisioned dashboard, so it works from a fresh clone with no clicking:
+
+```bash
+docker compose --profile observability up -d
+```
+
+Open `http://localhost:3000` (view-only without logging in; edit with user `admin` and `GRAFANA_ADMIN_PASSWORD`, default `admin`). Panels: leads, review rate, failures, content-filtered count, median and p95 processing time, leads over time by outcome, leads per rep, routing rule that fired, model that answered, processing time over time, and a table of the latest review-queue leads. The time picker applies to every panel. Plain `docker compose up` does not start Grafana.
+
+![Switchboard Grafana dashboard](docs/demo-screenshot.png)
+
+*Demo data from the synthetic eval set, captured mid-run, so some leads are still queued. The review rate is high because that set deliberately includes spam and unroutable emails.*
+
+**Metrics.** `GET /metrics` returns Prometheus-format text computed from Postgres on each scrape (leads by status, decisions by rule and by rep, leads by answering model, p50/p95 processing seconds), so the numbers are correct across the API, every worker, and restarts:
+
+```bash
+curl http://localhost:8000/metrics
+```
+
+**Logs.** API and worker write one JSON object per line to stdout. Each processed lead logs `lead_id`, `outcome`, `rule`, `rep`, `llm_model`, `confidence` and `duration_ms`. Set `LOG_FORMAT=text` for plain text while developing, and `LOG_LEVEL` to change verbosity.
+
+```bash
+docker compose logs worker --tail 20
+```
+
 ## Project Structure
 
 ```
@@ -266,6 +294,7 @@ switchboard/
 ├── config/
 │   └── routing.yaml
 ├── docs/               # architecture diagram (png + Mermaid source)
+├── grafana/            # provisioned datasource and dashboard (optional profile)
 ├── eval/               # datasets, run_eval.py, results, .cache/
 ├── migrations/         # Alembic
 ├── scripts/            # smoke.py, seed.py, list_owners.py, prep_synthetic.py, make_dataset.py

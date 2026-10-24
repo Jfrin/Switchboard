@@ -37,6 +37,9 @@ class Settings(BaseSettings):
 
     slack_webhook_url: str = ""
 
+    log_format: str = "json"  # json | text
+    log_level: str = "INFO"
+
     confidence_threshold: float = 0.7
     routing_config_path: str = "config/routing.yaml"
 

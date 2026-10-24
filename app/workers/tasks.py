@@ -1,4 +1,5 @@
 import logging
+import time
 
 from app.config import get_settings
 from app.db.models import LeadRecord, RoutingDecision
@@ -16,6 +17,7 @@ log = logging.getLogger(__name__)
 
 def run_pipeline(lead_id: str) -> None:
     settings = get_settings()
+    started = time.monotonic()
     with SessionLocal() as db:
         rec = db.get(LeadRecord, lead_id)
         if rec is None:
@@ -74,6 +76,19 @@ def run_pipeline(lead_id: str) -> None:
         )
         db.commit()
 
+        log.info(
+            "lead processed",
+            extra={
+                "lead_id": rec.id,
+                "outcome": rec.status,
+                "rule": decision.rule,
+                "rep": decision.rep,
+                "llm_model": llm_model,
+                "confidence": lead.confidence,
+                "duration_ms": round((time.monotonic() - started) * 1000),
+            },
+        )
+
         size = f"{employees} employees" if employees else "size unknown"
         message = (
             f"New lead: {lead.company or lead.email} ({size}) | intent={lead.intent} "
@@ -114,5 +129,5 @@ def process_lead(self, lead_id: str) -> None:
             raise self.retry(exc=exc, countdown=countdown) from exc
         mark_failed(lead_id, str(exc))
     except Exception as exc:
-        log.exception("lead %s failed", lead_id)
+        log.exception("lead failed", extra={"lead_id": lead_id})
         mark_failed(lead_id, f"{type(exc).__name__}: {exc}")
