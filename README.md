@@ -19,22 +19,9 @@ Everything runs in Docker. You do not need Python installed locally.
 
 ## Architecture
 
-```
-Email / Web form
-       |
-       v
-  FastAPI (ingest) --> Redis queue --> Worker (Celery)
-                                          |
-                  +-----------------------+------------------------+
-                  |                       |                        |
-             LLM extraction          Enrichment              Routing engine
-        (Azure / Gemini + Pydantic)  (domain lookup)         (YAML rules + RR)
-                                                                   |
-                                      +----------------------------+
-                                      |             |              |
-                                  HubSpot        Slack         Postgres
-                                  (CRM)        (alerts)      (audit log)
-```
+![Switchboard architecture](docs/architecture.png)
+
+The diagram source is `docs/architecture.mmd` (Mermaid); edit it and re-render to update the image.
 
 ## Tech Stack
 
@@ -79,7 +66,13 @@ docker compose exec api python scripts/smoke.py
 
 # list recent leads
 docker compose exec api python scripts/smoke.py --list
+
+# load 12 varied sample leads (SMB, enterprise, no territory, spam, duplicate, gibberish)
+# and print who each one was assigned to
+docker compose exec api python scripts/seed.py
 ```
+
+`seed.py` refuses to run with `CRM_MODE=hubspot`, because every routed lead would create a real HubSpot contact and deal. Use `CRM_MODE=mock` for demos (or pass `--allow-hubspot`). To seed from a dataset instead: `docker compose exec api python scripts/seed.py --file eval/dataset.jsonl --limit 20`.
 
 Or with curl:
 
@@ -106,6 +99,7 @@ Environment variables (see `.env.example`):
 | `GEMINI_API_KEY` | Gemini API key |
 | `GEMINI_RPM` | Requests per minute, per Gemini model (default `15`) |
 | `GEMINI_BATCH_SIZE` | Eval only: emails per request when Gemini is first in line (default `20`) |
+| `AZURE_BATCH_SIZE` | Eval only: emails per request when Azure is first in line (default `20`; `1` = no batching) |
 | `AZURE_ENDPOINT` | Resource endpoint ending in `/openai/v1/` |
 | `AZURE_API_KEY` | Key for the Azure resource |
 | `AZURE_RPM` | Requests per minute, per Azure deployment (default `60`) |
@@ -240,7 +234,7 @@ docker compose run --rm api python eval/run_eval.py --file synthetic_dev.jsonl -
 docker compose run --rm api python eval/run_eval.py --file synthetic_dev.jsonl --model azure:gpt-4.1-mini,gemini-3.5-flash-lite
 ```
 
-**Batching** (several emails per request) exists because Gemini's free tier limits requests per day, not tokens. It is automatic by default: `GEMINI_BATCH_SIZE` (20) when Gemini is the model answering, 1 for Azure. If Azure fails mid-run and Gemini takes over, later requests start batching by themselves. Force a size with `--batch`:
+**Batching** (several emails per request) cuts the number of requests: Gemini's free tier caps requests per day, and Azure is faster in batches. It is automatic by default: `GEMINI_BATCH_SIZE` (20) when Gemini is the model answering, `AZURE_BATCH_SIZE` (20) when Azure is. If Azure fails mid-run and Gemini takes over, later requests start batching by themselves. Force a size with `--batch`:
 
 ```bash
 docker compose run --rm api python eval/run_eval.py --file synthetic_dev.jsonl --model gemini-3.5-flash-lite --batch 20
@@ -271,9 +265,10 @@ switchboard/
 │   └── main.py
 ├── config/
 │   └── routing.yaml
+├── docs/               # architecture diagram (png + Mermaid source)
 ├── eval/               # datasets, run_eval.py, results, .cache/
 ├── migrations/         # Alembic
-├── scripts/            # smoke.py, list_owners.py, prep_synthetic.py, make_dataset.py
+├── scripts/            # smoke.py, seed.py, list_owners.py, prep_synthetic.py, make_dataset.py
 ├── tests/
 ├── docker-compose.yml
 ├── Dockerfile

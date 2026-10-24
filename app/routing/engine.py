@@ -47,11 +47,14 @@ def route(
     confidence: float,
     rules: dict,
     intent: str | None = None,
+    refused: bool = False,
     threshold: float,
     pick_rep: Callable[[str, list[str]], str],
 ) -> Decision:
     """Intent gate -> territory -> segment -> round-robin. Anything unclear goes to review."""
     fallback = rules["fallback_queue"]
+    if refused:  # every model refused the email: a human reads it
+        return Decision(fallback, None, "fallback:content_filtered", confidence)
     if intent in NON_LEADS:
         return Decision(fallback, None, f"fallback:intent_{intent}", confidence)
     if confidence < threshold:

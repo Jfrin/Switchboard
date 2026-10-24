@@ -4,7 +4,7 @@ from app.config import get_settings
 from app.db.models import LeadRecord, RoutingDecision
 from app.db.session import SessionLocal
 from app.enrichment import enrich
-from app.extraction.extractor import LLMUnavailable, extract_lead_with_model
+from app.extraction.extractor import REFUSED_MODEL, LLMUnavailable, extract_lead_with_model
 from app.integrations.crm import CRMUnavailable, get_crm
 from app.integrations.slack import notify
 from app.routing.engine import load_rules, route
@@ -33,6 +33,7 @@ def run_pipeline(lead_id: str) -> None:
             employee_count=employees,
             confidence=lead.confidence,
             intent=lead.intent,
+            refused=llm_model == REFUSED_MODEL,
             rules=load_rules(settings.routing_config_path),
             threshold=settings.confidence_threshold,
             pick_rep=make_db_picker(db),

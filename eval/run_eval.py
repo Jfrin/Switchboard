@@ -6,7 +6,7 @@
 
 --model   models to use, in order (comma separated); overrides LLM_MODELS for this run.
 --batch   emails per LLM request. Default is automatic and follows whichever model is
-          answering right now: GEMINI_BATCH_SIZE when Gemini is first in line, 1 for Azure.
+          answering right now: GEMINI_BATCH_SIZE or AZURE_BATCH_SIZE, by the first model in line.
           If Azure fails and Gemini takes over, later requests switch to batches by
           themselves. Pass a number to force one size (1 = no batching).
 Extraction answers are cached per (dataset, models, batch size) in eval/.cache/, so a
@@ -25,6 +25,7 @@ from pathlib import Path
 from app.config import get_settings
 from app.enrichment import enrich
 from app.extraction.extractor import (
+    REFUSED_MODEL,
     LLMUnavailable,
     available_models,
     default_batch_size,
@@ -150,6 +151,7 @@ def main() -> None:
             employee_count=lead.employee_count or info.get("employee_count"),
             confidence=lead.confidence,
             intent=lead.intent,
+            refused=model == REFUSED_MODEL,
             rules=rules,
             threshold=settings.confidence_threshold,
             pick_rep=lambda team, reps: reps[0],
@@ -182,6 +184,11 @@ def main() -> None:
     lines = ["# Evaluation results", "", f"Samples evaluated: {n}"]
     lines += ["", f"Models: {', '.join(model_list)} | emails per request: {args.batch or 'auto'}"]
     lines += ["", "Answered by: " + ", ".join(f"{m} ({c})" for m, c in models.most_common())]
+    if models[REFUSED_MODEL]:
+        lines += [
+            f"{models[REFUSED_MODEL]} email(s) were refused by every model's content filter and "
+            "sent to review (fallback:content_filtered); they count in the numbers below."
+        ]
     lines += ["", "## Extraction accuracy", ""]
     lines += [f"- {f}: {field_hits[f] / n:.1%}" for f in FIELDS]
     lines += ["", f"## Routing accuracy: {team_hits / n:.1%} ({team_hits}/{n})", ""]

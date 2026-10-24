@@ -1,0 +1,27 @@
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Inter, Helvetica, Arial, sans-serif", "fontSize": "15px", "primaryColor": "#eef2ff", "primaryBorderColor": "#4f46e5", "primaryTextColor": "#1e1b4b", "lineColor": "#64748b", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1"}, "flowchart": {"curve": "basis", "nodeSpacing": 50, "rankSpacing": 60}}}%%
+flowchart TB
+    IN["Inbound email<br/>or web form"] --> API["FastAPI<br/>POST /leads, returns 202"]
+    API --> Q[("Redis queue")]
+    Q --> W
+
+    subgraph W["Celery worker: process_lead"]
+        EX["1. LLM extraction<br/>Pydantic-validated JSON,<br/>regex fallback"] --> EN["2. Enrichment<br/>domain lookup,<br/>30-day cache"] --> RT["3. Routing engine<br/>intent gate, confidence, territory,<br/>segment, round-robin (YAML rules)"]
+    end
+
+    EX -. "tries in order" .-> AZ
+    subgraph LLM["Models, set by LLM_MODELS"]
+        AZ["Azure AI Foundry<br/>gpt-4.1-mini"] -. "fallback on quota,<br/>outage, refusal" .-> GM["Gemini<br/>flash-lite models"]
+    end
+    LLM -.- RD[("Redis<br/>rate limits and<br/>daily-quota marks")]
+
+    RT --> HS["HubSpot<br/>contact + deal, owner = rep"]
+    RT --> SL["Slack<br/>rep alert"]
+    RT --> PG[("Postgres<br/>leads, audit log,<br/>round-robin state")]
+    RT -- "spam, low confidence,<br/>no territory,<br/>content filtered" --> RV["Review queue<br/>no rep assigned"]
+
+    classDef store fill:#fef3c7,stroke:#d97706,color:#78350f
+    classDef ext fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef warn fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    class Q,PG,RD store
+    class HS,SL,AZ,GM ext
+    class RV warn

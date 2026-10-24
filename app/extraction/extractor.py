@@ -49,6 +49,9 @@ BATCH_SYSTEM_PROMPT = (
 )
 
 
+REFUSED_MODEL = "refused:content_filter"  # recorded as the model when every model refused
+
+
 class LLMUnavailable(Exception):
     """No Gemini model could answer (all exhausted or down). Callers retry later."""
 
@@ -286,6 +289,7 @@ def extract_lead_with_model(
             except LLMRefused as exc:
                 log.warning("input refused by every model: %s", exc)
                 lead = Lead(confidence=0.0)
+                model = REFUSED_MODEL
                 break
             text, used = (out.text, out.model) if isinstance(out, LLMResult) else (out, None)
             lead = Lead.model_validate_json(text)

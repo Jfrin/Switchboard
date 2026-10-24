@@ -190,10 +190,11 @@ def test_refused_by_every_model_raises_refused_not_unavailable(monkeypatch):
 
 
 def test_refused_email_becomes_zero_confidence_lead_not_a_crash():
-    from app.extraction.extractor import LLMRefused, extract_lead_with_model
+    from app.extraction.extractor import REFUSED_MODEL, LLMRefused, extract_lead_with_model
 
     def refuse(*_):
         raise LLMRefused("filtered")
 
     lead, model = extract_lead_with_model("jane@acme.com", "s", "b", llm=refuse)
-    assert lead.confidence == 0.0 and lead.email == "jane@acme.com" and model is None
+    assert lead.confidence == 0.0 and lead.email == "jane@acme.com"
+    assert model == REFUSED_MODEL

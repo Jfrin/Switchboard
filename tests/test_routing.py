@@ -59,3 +59,9 @@ def test_spam_and_other_never_reach_a_rep():
 def test_real_intents_still_route():
     assert _route(intent="pricing").rep == "alice"
     assert _route(intent="support").rep == "alice"
+
+
+def test_refused_email_goes_to_review_with_its_own_rule():
+    d = _route(refused=True, confidence=0.0)
+    assert d.team == "review" and d.rep is None
+    assert d.rule == "fallback:content_filtered"
