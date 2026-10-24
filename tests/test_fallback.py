@@ -145,3 +145,55 @@ def test_azure_http_payload(monkeypatch):
     assert seen["url"] == "https://r.openai.azure.com/openai/v1/chat/completions"
     assert seen["json"]["model"] == "dep"
     assert seen["headers"] == {"api-key": "k", "Authorization": "Bearer k"}
+
+
+def test_repeated_503_puts_model_on_short_cooldown(_models):
+    gen, _ = fake({"m1": [errors.ServerError(503, BUSY)] * 3, "m2": ["{}"]})
+    _call_llm("a", "b", "c", generate=gen, sleep=lambda s: None)
+    assert _models["m1"] == 60
+
+
+def test_available_models_skips_cooling_down_ones(_models):
+    from app.extraction.extractor import available_models
+
+    _models["m1"] = 30
+    assert available_models(["m1", "m2"]) == ["m2"]
+
+
+FILTERED = {
+    "error": {
+        "code": 400,
+        "message": "The response was filtered due to the prompt triggering Azure OpenAI's "
+        "content management policy.",
+    }
+}
+
+
+def test_content_filter_on_azure_falls_through_to_next_model(monkeypatch):
+    from app.extraction.extractor import LLMError
+
+    monkeypatch.setenv("GEMINI_MODELS", "azure:gpt,m2")
+    get_settings.cache_clear()
+    gen, calls = fake({"azure:gpt": [LLMError(400, FILTERED["error"]["message"])], "m2": ["{}"]})
+    res = _call_llm("a", "b", "c", generate=gen, sleep=lambda s: None)
+    assert res.model == "m2" and calls == ["azure:gpt", "m2"]
+
+
+def test_refused_by_every_model_raises_refused_not_unavailable(monkeypatch):
+    from app.extraction.extractor import LLMError, LLMRefused
+
+    monkeypatch.setenv("GEMINI_MODELS", "azure:gpt")
+    get_settings.cache_clear()
+    gen, _ = fake({"azure:gpt": [LLMError(400, FILTERED["error"]["message"])]})
+    with pytest.raises(LLMRefused):
+        _call_llm("a", "b", "c", generate=gen, sleep=lambda s: None)
+
+
+def test_refused_email_becomes_zero_confidence_lead_not_a_crash():
+    from app.extraction.extractor import LLMRefused, extract_lead_with_model
+
+    def refuse(*_):
+        raise LLMRefused("filtered")
+
+    lead, model = extract_lead_with_model("jane@acme.com", "s", "b", llm=refuse)
+    assert lead.confidence == 0.0 and lead.email == "jane@acme.com" and model is None

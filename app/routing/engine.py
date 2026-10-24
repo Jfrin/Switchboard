@@ -4,6 +4,9 @@ from pathlib import Path
 
 import yaml
 
+# Intents that are never routed to a rep, however confident the extraction is.
+NON_LEADS = {"spam", "other"}
+
 
 @dataclass
 class Decision:
@@ -43,11 +46,14 @@ def route(
     employee_count: int | None,
     confidence: float,
     rules: dict,
+    intent: str | None = None,
     threshold: float,
     pick_rep: Callable[[str, list[str]], str],
 ) -> Decision:
-    """Territory -> segment -> round-robin. Anything unclear goes to the review queue."""
+    """Intent gate -> territory -> segment -> round-robin. Anything unclear goes to review."""
     fallback = rules["fallback_queue"]
+    if intent in NON_LEADS:
+        return Decision(fallback, None, f"fallback:intent_{intent}", confidence)
     if confidence < threshold:
         return Decision(fallback, None, "fallback:low_confidence", confidence)
 

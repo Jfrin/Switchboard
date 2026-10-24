@@ -32,6 +32,7 @@ def run_pipeline(lead_id: str) -> None:
             country=country,
             employee_count=employees,
             confidence=lead.confidence,
+            intent=lead.intent,
             rules=load_rules(settings.routing_config_path),
             threshold=settings.confidence_threshold,
             pick_rep=make_db_picker(db),

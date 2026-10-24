@@ -47,3 +47,15 @@ def test_unknown_territory_goes_to_review():
 def test_missing_size_goes_to_review():
     d = _route(employee_count=None)
     assert d.rep is None and d.rule == "fallback:no_segment"
+
+
+def test_spam_and_other_never_reach_a_rep():
+    for intent in ("spam", "other"):
+        d = _route(intent=intent, confidence=0.99)
+        assert d.team == "review" and d.rep is None
+        assert d.rule == f"fallback:intent_{intent}"
+
+
+def test_real_intents_still_route():
+    assert _route(intent="pricing").rep == "alice"
+    assert _route(intent="support").rep == "alice"

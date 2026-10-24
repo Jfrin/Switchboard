@@ -42,3 +42,11 @@ def test_model_is_returned_with_llm_result():
         "jane@acme.com", "s", "b", llm=lambda *_: LLMResult('{"confidence": 0.9}', "m1")
     )
     assert model == "m1" and lead.confidence == 0.9
+
+
+def test_prompts_tell_the_model_to_infer_country_from_cities():
+    from app.extraction.extractor import BATCH_SYSTEM_PROMPT, SYSTEM_PROMPT
+
+    for prompt in (SYSTEM_PROMPT, BATCH_SYSTEM_PROMPT):
+        assert "Osaka -> JP" in prompt and "quoted or forwarded" in prompt
+        assert "SEO" in prompt

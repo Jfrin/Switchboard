@@ -14,7 +14,9 @@ class Settings(BaseSettings):
     llm_models: str = ""
     azure_endpoint: str = ""  # e.g. https://<resource>.openai.azure.com/openai/v1/
     azure_api_key: str = ""
+    azure_batch_size: int = 20  # eval only: emails per request when Azure is first in line
     azure_rpm: int = 60  # per deployment; 0 disables throttling
+    gemini_batch_size: int = 20  # eval only: emails per request when Gemini goes first
     gemini_rpm: int = 15  # max requests per minute PER MODEL; 0 disables throttling
 
     database_url: str = "sqlite+pysqlite:///./switchboard.db"
