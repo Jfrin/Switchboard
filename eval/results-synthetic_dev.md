@@ -1,26 +1,28 @@
 # Evaluation results
 
-Samples evaluated: 96 (skipped on LLM error: 4)
+Samples evaluated: 100
+
+Answered by: gemini-3.1-flash-lite (98), gemini-3.5-flash-lite (2)
 
 ## Extraction accuracy
 
-- company: 89.6%
+- company: 90.0%
 - intent: 100.0%
 - country: 100.0%
 
-## Routing accuracy: 97.9%
+## Routing accuracy: 98.0%
 
 ## Confusion (expected -> got)
 
-- enterprise -> enterprise: 29
+- enterprise -> enterprise: 32
 - enterprise -> smb: 1
 - review -> enterprise: 1
-- review -> review: 32
+- review -> review: 33
 - smb -> smb: 33
 
 ## Extraction misses
 
-- morgan825@gmail.com: company expected 'AeroPulse Tech Messy 52', got 'AeroPulse Tech'
+- morgan825@gmail.com: company expected 'AeroPulse Tech Messy 52', got None
 - michael95@gmail.com: company expected 'Nexus Global Messy 14', got 'Nexus Global'
 - guillaume485@gmail.com: company expected 'Apex Dynamics Messy 140', got 'Apex Dynamics'
 - michael204@gmail.com: company expected 'Apex Dynamics Messy 108', got 'Apex Dynamics'

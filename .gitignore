@@ -26,3 +26,4 @@ redis_data/
 .vscode/
 .idea/
 .DS_Store
+eval/.cache/

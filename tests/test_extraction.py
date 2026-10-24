@@ -33,3 +33,12 @@ def test_two_failures_yield_zero_confidence():
     lead = extract_lead("jane@acme.com", "s", "b", llm=lambda *_: "garbage")
     assert lead.confidence == 0.0
     assert lead.email == "jane@acme.com"
+
+
+def test_model_is_returned_with_llm_result():
+    from app.extraction.extractor import LLMResult, extract_lead_with_model
+
+    lead, model = extract_lead_with_model(
+        "jane@acme.com", "s", "b", llm=lambda *_: LLMResult('{"confidence": 0.9}', "m1")
+    )
+    assert model == "m1" and lead.confidence == 0.9

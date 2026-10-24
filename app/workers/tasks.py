@@ -4,7 +4,7 @@ from app.config import get_settings
 from app.db.models import LeadRecord, RoutingDecision
 from app.db.session import SessionLocal
 from app.enrichment import enrich
-from app.extraction.extractor import LLMUnavailable, extract_lead
+from app.extraction.extractor import LLMUnavailable, extract_lead_with_model
 from app.integrations.crm import CRMUnavailable, get_crm
 from app.integrations.slack import notify
 from app.routing.engine import load_rules, route
@@ -23,7 +23,7 @@ def run_pipeline(lead_id: str) -> None:
         rec.status = "processing"
         db.commit()
 
-        lead = extract_lead(rec.sender, rec.subject, rec.body)
+        lead, llm_model = extract_lead_with_model(rec.sender, rec.subject, rec.body)
         enrichment = enrich(lead.domain, db)
         country = lead.country or enrichment.get("country")
         employees = lead.employee_count or enrichment.get("employee_count")
@@ -58,6 +58,7 @@ def run_pipeline(lead_id: str) -> None:
             deal_url = crm.deal_url(deal_id)
 
         rec.parsed = lead.model_dump()
+        rec.llm_model = llm_model
         rec.enrichment = enrichment
         rec.decision = {**decision.to_dict(), "deal_id": deal_id}
         rec.status = "review" if decision.rep is None else "routed"
@@ -94,13 +95,21 @@ def mark_failed(lead_id: str, error: str) -> None:
 RETRYABLE = (ConnectionError, TimeoutError, LLMUnavailable, CRMUnavailable)
 
 
-@celery_app.task(name="process_lead", bind=True, max_retries=5)
+@celery_app.task(name="process_lead", bind=True, max_retries=40)
 def process_lead(self, lead_id: str) -> None:
     try:
         run_pipeline(lead_id)
     except RETRYABLE as exc:
-        if self.request.retries < self.max_retries:
-            raise self.retry(exc=exc, countdown=2**self.request.retries) from exc
+        retries = self.request.retries
+        if isinstance(exc, LLMUnavailable):
+            # Every model is out of quota: wait until the earliest reset. Capped under the
+            # Redis broker's 1h visibility timeout, so a long wait is several shorter retries.
+            countdown = min(max(exc.retry_after, 30), 1800)
+            limit = self.max_retries
+        else:
+            countdown, limit = 2**retries, 5
+        if retries < limit:
+            raise self.retry(exc=exc, countdown=countdown) from exc
         mark_failed(lead_id, str(exc))
     except Exception as exc:
         log.exception("lead %s failed", lead_id)

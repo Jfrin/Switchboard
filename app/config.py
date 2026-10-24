@@ -7,8 +7,15 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-3.5-flash-lite"
-    gemini_rpm: int = 5  # max requests per minute; 0 disables throttling
+    # Tried in order; a model whose daily quota is spent is skipped until it resets.
+    gemini_models: str = "gemini-3.5-flash-lite,gemini-3.1-flash-lite"
+    # Optional single ordered list across providers. Entries are plain Gemini model names or
+    # "azure:<deployment name>". Empty means use GEMINI_MODELS.
+    llm_models: str = ""
+    azure_endpoint: str = ""  # e.g. https://<resource>.openai.azure.com/openai/v1/
+    azure_api_key: str = ""
+    azure_rpm: int = 60  # per deployment; 0 disables throttling
+    gemini_rpm: int = 15  # max requests per minute PER MODEL; 0 disables throttling
 
     database_url: str = "sqlite+pysqlite:///./switchboard.db"
     redis_url: str = "redis://localhost:6379/0"
@@ -30,6 +37,12 @@ class Settings(BaseSettings):
 
     confidence_threshold: float = 0.7
     routing_config_path: str = "config/routing.yaml"
+
+
+    @property
+    def gemini_model_list(self) -> list[str]:
+        raw = self.llm_models or self.gemini_models
+        return [m.strip() for m in raw.split(",") if m.strip()]
 
 
 @lru_cache
