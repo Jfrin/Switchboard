@@ -165,8 +165,15 @@ def test_support_templated_label_and_queue_target():
     assert d.team == "product-feedback" and d.rep is None
 
 
-def test_support_fallback_queue_is_its_own():
-    d = _support(intent="spam")
+def test_support_fallback_queue_is_its_own(monkeypatch):
+    monkeypatch.setenv("ROUTING_FALLBACK_QUEUE", "")  # .env may set it; this tests the YAML value
+    get_settings.cache_clear()
+    try:
+        profile = load_profile("config/profiles/support.yaml")
+    finally:
+        get_settings.cache_clear()
+    d = route(facts={"intent": "spam"}, confidence=0.9, profile=profile, threshold=0.7,
+              pick_rep=lambda team, reps: reps[0])
     assert d.team == "triage" and d.rule == "fallback:intent_spam"
 
 
