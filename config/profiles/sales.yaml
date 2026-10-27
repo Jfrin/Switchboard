@@ -1,0 +1,76 @@
+# Sales inquiry routing (the default profile).
+# Pick a profile with PROFILE_PATH in .env. These values can be overridden from .env:
+#   ROUTING_SMB_REPS, ROUTING_ENTERPRISE_REPS, ROUTING_ENTERPRISE_MIN_EMPLOYEES,
+#   ROUTING_TERRITORIES, ROUTING_FALLBACK_QUEUE
+name: sales
+item_name: lead
+subject: inbound sales inquiries
+
+# Categories the AI picks from. Anything else it says is rejected.
+categories: [pricing, demo, support, partnership, spam, other]
+default_category: other
+category_help:
+  spam: unsolicited marketing, SEO or advertising offers, phishing, or gibberish
+  other: a real message that is not a sales inquiry (a job application, a personal note)
+
+# What the AI extracts besides intent, email, phone, domain and confidence.
+fields:
+  name: {type: string, description: the sender's full name}
+  company: 
+    type: string
+    description: >-
+      the company the email is about, copied as written, keeping any trailing numbers.
+      For forwarded or quoted emails, read the quoted message.
+  role: {type: string, description: the sender's job title}
+  urgency: {type: choice, values: [low, medium, high], default: medium, description: how urgent the request is}
+  country:
+    type: string
+    description: >-
+      ISO 3166-1 alpha-2 code. Infer it from any country, city or region the email mentions
+      anywhere, including quoted or forwarded text (Osaka -> JP, Lyon -> FR, Singapore -> SG,
+      Rio de Janeiro -> BR). Use null only when no location is given.
+  employee_count: {type: integer, description: an integer when the email states a headcount or team size}
+
+# Facts computed from extracted fields, usable in rules.
+derived:
+  region:
+    from: country
+    map:
+      APAC: [SG, PH, AU, JP]
+      EMEA: [GB, DE, FR]
+      AMER: [US, CA, BR]
+  segment:
+    from: employee_count
+    bands:                      # first band whose min is <= the value
+      - {min: 500, value: enterprise}
+      - {min: 0, value: smb}
+
+teams:
+  smb: {reps: [alice, bob]}
+  enterprise: {reps: [carol, dave]}
+
+# First matching rule wins. `label` is what the audit log records ({field} is filled in).
+rules:
+  - when: {intent: [spam, other]}
+    to: {queue: fallback}
+    label: "fallback:intent_{intent}"
+  - when: {region: {exists: false}}
+    to: {queue: fallback}
+    label: "fallback:no_territory"
+  - when: {segment: {exists: false}}
+    to: {queue: fallback}
+    label: "fallback:no_segment"
+  - to: {team: "{segment}"}
+    label: "territory:{region}+segment:{segment}+round_robin"
+
+fallback_queue: review
+
+# If the email doesn't say, fill these from the enrichment lookup on the sender's domain.
+enrichment:
+  fill: [country, employee_count]
+
+integrations:
+  crm: true      # create the contact + deal in HubSpot (or the mock CRM)
+  slack: true
+  title_field: company
+  summary_fields: [intent, urgency, employee_count]

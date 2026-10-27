@@ -41,8 +41,14 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     confidence_threshold: float = 0.7
-    routing_config_path: str = "config/routing.yaml"
-
+    # Which profile (what the AI reads and how items are routed) to run.
+    profile_path: str = "config/profiles/sales.yaml"
+    # Optional overrides for the profile file; empty means use the YAML value.
+    routing_smb_reps: str = ""  # "smb-apac-1,smb-emea-1"
+    routing_enterprise_reps: str = ""
+    routing_enterprise_min_employees: str = ""  # "500"
+    routing_territories: str = ""  # "APAC=SG,PH,AU,JP;EMEA=GB,DE,FR;AMER=US,CA,BR"
+    routing_fallback_queue: str = ""  # "review"
 
     @property
     def gemini_model_list(self) -> list[str]:

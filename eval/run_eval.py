@@ -3,6 +3,10 @@
     python eval/run_eval.py --file synthetic_dev.jsonl
     python eval/run_eval.py --file synthetic_test.jsonl --model azure:gpt-4.1-mini
     python eval/run_eval.py --file synthetic_dev.jsonl --model gemini-3.5-flash-lite --batch 10
+    python eval/run_eval.py --file support_triage.jsonl --profile config/profiles/support.yaml
+
+--profile which profile to run (default PROFILE_PATH). Every key under "expected" in the dataset
+          except "team" is scored as an extracted field; "team" is scored as the routing outcome.
 
 --model   models to use, in order (comma separated); overrides LLM_MODELS for this run.
 --batch   emails per LLM request. Default is automatic and follows whichever model is
@@ -32,11 +36,10 @@ from app.extraction.extractor import (
     extract_lead_with_model,
     extract_leads_batch,
 )
-from app.extraction.schema import Lead
-from app.routing.engine import load_rules, route
+from app.profile import get_profile
+from app.routing.engine import route
 
 ROOT = Path(__file__).parent
-FIELDS = ["company", "intent", "country"]
 # The generator appends " Messy 53" to some company names; the model rightly drops it.
 MESSY_SUFFIX = re.compile(r"\s+Messy\s+\d+$")
 # spam and other are both "not a real lead" and both go to the review queue.
@@ -75,22 +78,28 @@ def main() -> None:
     ap.add_argument("--file", default="dataset.jsonl", help="dataset inside eval/")
     ap.add_argument("--model", default=None, help="comma-separated models, in order")
     ap.add_argument("--batch", type=int, default=None, help="emails per request (default: auto)")
+    ap.add_argument("--profile", default=None, help="profile YAML (default: PROFILE_PATH)")
     args = ap.parse_args()
 
     if args.model:
         os.environ["LLM_MODELS"] = args.model
         get_settings.cache_clear()
     settings = get_settings()
+    if args.profile:
+        settings.profile_path = args.profile
+    profile = get_profile()
+    Lead = profile.model
     model_list = settings.gemini_model_list
-    rules = load_rules(settings.routing_config_path)
     path = ROOT / args.file
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
     rows = rows[: args.limit]
 
     slug = re.sub(r"[^a-z0-9.]+", "-", "_".join(model_list).lower()).strip("-")
     variant = f"{slug}-b{args.batch or 'auto'}"
+    if profile.name != "sales":  # sales keeps its original file names
+        variant = f"{profile.name}-{variant}"
     results_name = "results.md" if args.file == "dataset.jsonl" else f"results-{path.stem}.md"
-    if args.model or args.batch:
+    if args.model or args.batch or profile.name != "sales":
         results_name = results_name.replace(".md", f"-{variant}.md")
 
     # Extraction answers are saved as they arrive, so a crash or an exhausted quota loses
@@ -100,6 +109,8 @@ def main() -> None:
     cache = load_cache(cache_path)
     models: Counter[str] = Counter()
 
+    # Scored fields: everything the dataset labels except the routing outcome.
+    fields = [k for k in rows[0]["expected"] if k != "team"] if rows else []
     todo = [r for r in rows if row_key(r) not in cache]
     print(
         f"{len(rows)} rows, {len(todo)} to extract with {model_list} "
@@ -145,26 +156,30 @@ def main() -> None:
         entry = cache[row_key(row)]
         lead, model = Lead(**entry["lead"]), entry.get("model")
         models[model or "none (regex fallback)"] += 1
-        info = enrich(lead.domain)
+        facts = lead.model_dump()
+        if profile.enrich_fill:
+            info = enrich(lead.domain)
+            for f in profile.enrich_fill:
+                if facts.get(f) in (None, ""):
+                    facts[f] = info.get(f)
         decision = route(
-            country=lead.country or info.get("country"),
-            employee_count=lead.employee_count or info.get("employee_count"),
+            facts=facts,
             confidence=lead.confidence,
-            intent=lead.intent,
             refused=model == REFUSED_MODEL,
-            rules=rules,
+            profile=profile,
             threshold=settings.confidence_threshold,
             pick_rep=lambda team, reps: reps[0],
         )
         exp = row["expected"]
-        for f in FIELDS:
-            got = getattr(lead, f)
+        for f in fields:
+            got = getattr(lead, f, None)  # what the model extracted, before enrichment
             ok = same(f, got, exp[f])
             field_hits[f] += ok
             if not ok:
                 field_misses.append(f"- {row['from']}: {f} expected {exp[f]!r}, got {got!r}")
         confusion[(exp["team"], decision.team)] += 1
-        mock_row = row["from"].rsplit("@", 1)[-1].lower() in MOCK_DOMAINS
+        domain = row["from"].rsplit("@", 1)[-1].lower()
+        mock_row = bool(profile.enrich_fill) and domain in MOCK_DOMAINS
         hit = decision.team == exp["team"]
         team_hits += hit
         if mock_row:
@@ -173,15 +188,16 @@ def main() -> None:
         if not hit:
             misses.append(
                 f"- {row['from']}: expected {exp['team']}, got {decision.team} "
-                f"({decision.rule}; country={lead.country}, "
-                f"employees={lead.employee_count}, confidence={lead.confidence})"
+                f"({decision.rule}; confidence={lead.confidence}; "
+                + ", ".join(f"{k}={v}" for k, v in facts.items() if k in fields)
+                + ")"
             )
 
     n = len(rows)
     if n == 0:
         print("no rows evaluated")
         return
-    lines = ["# Evaluation results", "", f"Samples evaluated: {n}"]
+    lines = ["# Evaluation results", "", f"Profile: {profile.name} | Samples evaluated: {n}"]
     lines += ["", f"Models: {', '.join(model_list)} | emails per request: {args.batch or 'auto'}"]
     lines += ["", "Answered by: " + ", ".join(f"{m} ({c})" for m, c in models.most_common())]
     if models[REFUSED_MODEL]:
@@ -190,9 +206,9 @@ def main() -> None:
             "sent to review (fallback:content_filtered); they count in the numbers below."
         ]
     lines += ["", "## Extraction accuracy", ""]
-    lines += [f"- {f}: {field_hits[f] / n:.1%}" for f in FIELDS]
+    lines += [f"- {f}: {field_hits[f] / n:.1%}" for f in fields]
     lines += ["", f"## Routing accuracy: {team_hits / n:.1%} ({team_hits}/{n})", ""]
-    if n - mock_rows:
+    if mock_rows:
         clean = (team_hits - mock_hits) / (n - mock_rows)
         lines += [
             f"Excluding {mock_rows} rows from mock-enrichment domains "

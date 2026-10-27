@@ -5,7 +5,6 @@ from typing import Protocol
 import httpx
 
 from app.config import get_settings
-from app.routing.engine import load_rules
 
 log = logging.getLogger(__name__)
 
@@ -178,8 +177,7 @@ def _hubspot() -> HubSpotCRM:
     s = get_settings()
     if not s.hubspot_token:
         raise RuntimeError("CRM_MODE=hubspot but HUBSPOT_TOKEN is empty")
-    owners = load_rules(s.routing_config_path).get("hubspot_owner_ids") or {}
-    owners = {**owners, **parse_owner_ids(s.hubspot_owner_ids)}
+    owners = parse_owner_ids(s.hubspot_owner_ids)
     return HubSpotCRM(
         s.hubspot_token,
         s.hubspot_portal_id,

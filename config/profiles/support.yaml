@@ -1,0 +1,70 @@
+# Example second profile: support-ticket triage. Use it with
+#   PROFILE_PATH=config/profiles/support.yaml
+name: support
+item_name: ticket
+subject: inbound customer support emails
+
+categories: [outage, bug, billing, account, how_to, feature_request, spam, other]
+default_category: other
+category_help:
+  outage: the product is down or unusable for many users
+  bug: something is broken or behaves wrongly for the sender
+  billing: invoices, charges, refunds, plans
+  account: login, password, access, user management
+  how_to: a question about how to use a feature
+  feature_request: the sender asks for something new
+  spam: unsolicited marketing, SEO or advertising offers, phishing, or gibberish
+  other: a real message that fits none of the above
+
+fields:
+  summary: {type: string, description: one short sentence describing the problem}
+  product: {type: string, description: the product or feature the email is about}
+  severity:
+    type: choice
+    values: [low, medium, high]
+    default: medium
+    description: high = blocked or losing money now, low = cosmetic or a general question
+  plan:
+    type: choice
+    values: [free, pro, enterprise]
+    description: the plan the sender says they are on; null if not stated
+
+teams:
+  oncall: {reps: [erin, frank]}
+  billing: {reps: [grace, heidi]}
+  engineering: {reps: [ivan, judy]}
+  support: {reps: [ken, leo]}
+
+rules:
+  - when: {intent: [spam, other]}
+    to: {queue: fallback}
+    label: "fallback:intent_{intent}"
+  - when: {intent: outage}
+    to: {team: oncall}
+    label: "outage->oncall"
+  - when: {intent: bug, severity: high}
+    to: {team: oncall}
+    label: "high-severity-bug->oncall"
+  - when: {intent: bug, plan: enterprise}
+    to: {team: engineering}
+    label: "enterprise-bug->engineering"
+  - when: {intent: bug}
+    to: {team: support}
+    label: "bug->support"
+  - when: {intent: billing}
+    to: {team: billing}
+    label: "billing->billing"
+  - when: {intent: [account, how_to]}
+    to: {team: support}
+    label: "{intent}->support"
+  - when: {intent: feature_request}
+    to: {queue: product-feedback}
+    label: "feature_request->product-feedback"
+
+fallback_queue: triage
+
+integrations:
+  crm: false
+  slack: true
+  title_field: summary
+  summary_fields: [intent, severity, product]

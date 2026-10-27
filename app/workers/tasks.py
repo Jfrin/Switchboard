@@ -8,7 +8,8 @@ from app.enrichment import enrich
 from app.extraction.extractor import REFUSED_MODEL, LLMUnavailable, extract_lead_with_model
 from app.integrations.crm import CRMUnavailable, get_crm
 from app.integrations.slack import notify
-from app.routing.engine import load_rules, route
+from app.profile import get_profile
+from app.routing.engine import route, with_derived
 from app.routing.round_robin import make_db_picker
 from app.workers.celery_app import celery_app
 
@@ -25,39 +26,41 @@ def run_pipeline(lead_id: str) -> None:
         rec.status = "processing"
         db.commit()
 
+        profile = get_profile()
         lead, llm_model = extract_lead_with_model(rec.sender, rec.subject, rec.body)
-        enrichment = enrich(lead.domain, db)
-        country = lead.country or enrichment.get("country")
-        employees = lead.employee_count or enrichment.get("employee_count")
+        facts = lead.model_dump()
+        enrichment = enrich(lead.domain, db) if profile.enrich_fill else {}
+        for field in profile.enrich_fill:  # the email's own facts win over the lookup
+            if facts.get(field) in (None, ""):
+                facts[field] = enrichment.get(field)
 
         decision = route(
-            country=country,
-            employee_count=employees,
+            facts=facts,
             confidence=lead.confidence,
-            intent=lead.intent,
             refused=llm_model == REFUSED_MODEL,
-            rules=load_rules(settings.routing_config_path),
+            profile=profile,
             threshold=settings.confidence_threshold,
             pick_rep=make_db_picker(db),
         )
 
+        title = (facts.get(profile.title_field or "") or lead.email or rec.sender) or "unknown"
         deal_id = deal_url = None
-        if decision.rep and lead.email:
-            first, _, last = (lead.name or "").partition(" ")
+        if profile.crm and decision.rep and lead.email:
+            first, _, last = (facts.get("name") or "").partition(" ")
             crm = get_crm()
             contact_id = crm.upsert_contact(
                 lead.email,
                 {
                     "firstname": first,
                     "lastname": last,
-                    "company": lead.company,
-                    "jobtitle": lead.role,
+                    "company": facts.get("company"),
+                    "jobtitle": facts.get("role"),
                     "phone": lead.phone,
                 },
                 owner=decision.rep,
             )
             deal_id = crm.create_deal(
-                contact_id, f"{lead.company or lead.domain} inquiry", owner=decision.rep
+                contact_id, f"{facts.get('company') or lead.domain} inquiry", owner=decision.rep
             )
             deal_url = crm.deal_url(deal_id)
 
@@ -89,15 +92,19 @@ def run_pipeline(lead_id: str) -> None:
             },
         )
 
-        size = f"{employees} employees" if employees else "size unknown"
-        message = (
-            f"New lead: {lead.company or lead.email} ({size}) | intent={lead.intent} "
-            f"urgency={lead.urgency} | assigned={decision.rep or 'review queue'} "
-            f"({decision.rule})"
-        )
-        if deal_url:
-            message += f" | {deal_url}"
-        notify(message)
+        if profile.slack:
+            full = with_derived(profile, facts)
+            details = " ".join(
+                f"{f}={full[f]}" for f in profile.summary_fields if full.get(f) is not None
+            )
+            message = (
+                f"New {profile.item_name}: {title}"
+                + (f" | {details}" if details else "")
+                + f" | assigned={decision.rep or decision.team} ({decision.rule})"
+            )
+            if deal_url:
+                message += f" | {deal_url}"
+            notify(message)
 
 
 def mark_failed(lead_id: str, error: str) -> None:

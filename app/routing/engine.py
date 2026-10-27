@@ -1,11 +1,13 @@
+"""Generic rule engine: derived fields, then ordered rules, first match wins.
+
+Everything unclear goes to the profile's fallback queue with a label that says why.
+"""
+
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from typing import Any
 
-import yaml
-
-# Intents that are never routed to a rep, however confident the extraction is.
-NON_LEADS = {"spam", "other"}
+from app.profile import TEMPLATE, Profile
 
 
 @dataclass
@@ -19,55 +21,113 @@ class Decision:
         return asdict(self)
 
 
-def load_rules(path: str | Path) -> dict:
-    with open(path) as f:
-        return yaml.safe_load(f)
+def with_derived(profile: Profile, facts: dict[str, Any]) -> dict[str, Any]:
+    """The extracted facts plus the profile's derived fields (None when the source is missing)."""
+    out = dict(facts)
+    for name, spec in profile.derived.items():
+        value = facts.get(spec["from"])
+        result = None
+        if value is not None:
+            if spec.get("map") is not None:
+                for label, members in spec["map"].items():
+                    if str(value).upper() in [str(m).upper() for m in members]:
+                        result = label
+                        break
+            else:
+                try:
+                    number = float(value)
+                except (TypeError, ValueError):
+                    number = None
+                if number is not None:
+                    for band in spec["bands"]:
+                        if number >= band["min"]:
+                            result = band["value"]
+                            break
+        out[name] = result
+    return out
 
 
-def region_for(country: str | None, rules: dict) -> str | None:
-    if not country:
-        return None
-    for region, countries in rules["territories"].items():
-        if country.upper() in countries:
-            return region
-    return None
+def _same(a: Any, b: Any) -> bool:
+    if isinstance(a, str) and isinstance(b, str):
+        return a.casefold() == b.casefold()
+    return a == b
 
 
-def segment_for(employee_count: int | None, rules: dict) -> str | None:
-    if employee_count is None:
-        return None
-    threshold = rules["segments"]["enterprise_min_employees"]
-    return "enterprise" if employee_count >= threshold else "smb"
+def _op(op: str, value: Any, arg: Any) -> bool:
+    if op == "exists":
+        return (value is not None and value != "") == bool(arg)
+    if value is None:
+        return op == "not_in"  # a missing value is not in any list
+    try:
+        if op == "eq":
+            return _same(value, arg)
+        if op == "in":
+            return any(_same(value, a) for a in arg)
+        if op == "not_in":
+            return not any(_same(value, a) for a in arg)
+        if op == "gt":
+            return value > arg
+        if op == "gte":
+            return value >= arg
+        if op == "lt":
+            return value < arg
+        if op == "lte":
+            return value <= arg
+        if op == "contains":
+            if isinstance(value, str):
+                return str(arg).casefold() in value.casefold()
+            return any(_same(v, arg) for v in value)
+    except TypeError:
+        return False
+    return False
+
+
+def _matches(when: dict, facts: dict[str, Any]) -> bool:
+    for field, cond in (when or {}).items():
+        value = facts.get(field)
+        if isinstance(cond, dict):
+            ops = list(cond.items())
+        elif isinstance(cond, list):
+            ops = [("in", cond)]
+        else:
+            ops = [("eq", cond)]
+        if not all(_op(op, value, arg) for op, arg in ops):
+            return False
+    return True
+
+
+def _fill(text: str, facts: dict[str, Any]) -> str:
+    return TEMPLATE.sub(lambda m: str(facts.get(m.group(1)) or ""), text)
 
 
 def route(
     *,
-    country: str | None,
-    employee_count: int | None,
+    facts: dict[str, Any],
     confidence: float,
-    rules: dict,
-    intent: str | None = None,
-    refused: bool = False,
+    profile: Profile,
     threshold: float,
     pick_rep: Callable[[str, list[str]], str],
+    refused: bool = False,
 ) -> Decision:
-    """Intent gate -> territory -> segment -> round-robin. Anything unclear goes to review."""
-    fallback = rules["fallback_queue"]
-    if refused:  # every model refused the email: a human reads it
+    """Built-in checks first (refused, low confidence), then the profile's rules in order."""
+    fallback = profile.fallback_queue
+    if refused:  # every model refused the message: a human reads it
         return Decision(fallback, None, "fallback:content_filtered", confidence)
-    if intent in NON_LEADS:
-        return Decision(fallback, None, f"fallback:intent_{intent}", confidence)
     if confidence < threshold:
         return Decision(fallback, None, "fallback:low_confidence", confidence)
 
-    region = region_for(country, rules)
-    if region is None:
-        return Decision(fallback, None, "fallback:no_territory", confidence)
-
-    segment = segment_for(employee_count, rules)
-    if segment is None:
-        return Decision(fallback, None, "fallback:no_segment", confidence)
-
-    reps = rules["teams"][segment]["reps"]
-    rep = pick_rep(segment, reps)
-    return Decision(segment, rep, f"territory:{region}+segment:{segment}+round_robin", confidence)
+    full = with_derived(profile, {**facts, "confidence": confidence})
+    for i, rule in enumerate(profile.rules, 1):
+        if not _matches(rule.get("when"), full):
+            continue
+        label = _fill(rule["label"], full) if rule.get("label") else f"rule:{i}"
+        kind, target = next(iter(rule["to"].items()))
+        target = _fill(str(target), full)
+        if kind == "queue":
+            queue = fallback if target == "fallback" else target
+            return Decision(queue, None, label, confidence)
+        reps = profile.teams.get(target)
+        if not reps:
+            return Decision(fallback, None, f"fallback:unknown_team:{target}", confidence)
+        return Decision(target, pick_rep(target, reps), label, confidence)
+    return Decision(fallback, None, "fallback:no_match", confidence)

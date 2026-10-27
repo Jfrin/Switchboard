@@ -113,6 +113,12 @@ Environment variables (see `.env.example`):
 | `ENRICHMENT_PROVIDER` | `mock` (Apollo/Hunter not implemented yet) |
 | `LOG_FORMAT` / `LOG_LEVEL` | `json` (default) or `text`; log level (default `INFO`) |
 | `GRAFANA_ADMIN_PASSWORD` | Admin password for the optional Grafana service (default `admin`) |
+| `PROFILE_PATH` | Profile to run (default `config/profiles/sales.yaml`; see Profiles below) |
+| `ROUTING_SMB_REPS` / `ROUTING_ENTERPRISE_REPS` | Comma-separated rep names per team, e.g. `smb-apac-1,smb-emea-1`. Empty uses the profile's own list |
+| `ROUTING_TEAM_<NAME>_REPS` | Same for any team in any profile, e.g. `ROUTING_TEAM_BILLING_REPS=grace,heidi` |
+| `ROUTING_ENTERPRISE_MIN_EMPLOYEES` | Headcount at which a lead counts as enterprise (default `500`) |
+| `ROUTING_TERRITORIES` | `REGION=CC,CC;REGION=CC` e.g. `APAC=SG,PH,AU,JP;EMEA=GB,DE,FR;AMER=US,CA,BR` |
+| `ROUTING_FALLBACK_QUEUE` | Name of the review queue (default `review`) |
 | `CONFIDENCE_THRESHOLD` | Below this, leads go to the review queue (default `0.7`) |
 
 ### Choosing models
@@ -140,29 +146,51 @@ docker compose up -d --force-recreate api worker
 
 Find HubSpot owner ids with `docker compose exec api python scripts/list_owners.py`.
 
-### Routing rules
+### Profiles
 
-Rules live in `config/routing.yaml` and can be changed without touching code:
+A profile is one YAML file that says what the AI reads and how items are routed, so Switchboard is not limited to sales. One profile is active at a time, chosen with `PROFILE_PATH` in `.env`. Two ship with the repo:
+
+| File | What it does |
+|---|---|
+| `config/profiles/sales.yaml` | Default. Sales inquiries: territory and company size, round-robin, HubSpot and Slack |
+| `config/profiles/support.yaml` | Example. Support-ticket triage: outage, bug, billing, and so on, routed by category, severity and plan; Slack only |
+
+To switch, set `PROFILE_PATH=config/profiles/support.yaml` in `.env` and recreate the containers (`docker compose up -d --force-recreate api worker`). To make your own, copy one and edit it. A bad profile stops startup with a message that names the rule or field that is wrong.
 
 ```yaml
+name: support
+item_name: ticket            # used in the Slack message
+subject: inbound customer support emails   # "You extract data from ..." in the prompt
+categories: [outage, bug, billing, account, how_to, feature_request, spam, other]
+default_category: other
+category_help:               # shown to the AI so it knows what each category means
+  spam: unsolicited marketing, phishing, or gibberish
+fields:                      # what the AI extracts (string, integer, number, boolean, choice)
+  summary: {type: string, description: one short sentence describing the problem}
+  severity: {type: choice, values: [low, medium, high], default: medium}
+  plan: {type: choice, values: [free, pro, enterprise]}
+derived:                     # computed from extracted fields, usable in rules (map or bands)
+  region: {from: country, map: {APAC: [SG, JP]}}
 teams:
-  smb:
-    reps: [alice, bob]
-  enterprise:
-    reps: [carol, dave]
-
-segments:
-  enterprise_min_employees: 500
-
-territories:
-  APAC: [SG, PH, AU, JP]
-  EMEA: [GB, DE, FR]
-  AMER: [US, CA, BR]
-
-fallback_queue: review
+  oncall: {reps: [erin, frank]}
+rules:                       # in order; the first match wins
+  - when: {intent: outage}
+    to: {team: oncall}       # or {queue: some-queue}; {queue: fallback} = fallback_queue
+    label: "outage->oncall"  # recorded in the audit log; {field} is filled in
+fallback_queue: triage
+enrichment: {fill: [country, employee_count]}   # fill from the domain lookup when the email lacks them
+integrations: {crm: false, slack: true, title_field: summary, summary_fields: [intent, severity]}
 ```
 
-Assignment order: intent gate (spam and other go to review), confidence check, territory, segment, then round-robin within the matching team.
+Conditions in `when` are all required. `intent: [a, b]` means "is one of", `severity: high` means equals, and `{gte: 500}` style operators are `eq in not_in gt gte lt lte contains exists`. `intent`, `email`, `phone`, `domain` and `confidence` exist in every profile.
+
+Checks that always run first, in every profile: a message every model refused goes to the fallback queue (`fallback:content_filtered`), then anything under `CONFIDENCE_THRESHOLD` (`fallback:low_confidence`). If no rule matches, it goes to the fallback queue as `fallback:no_match`; a rule that names a team that does not exist gives `fallback:unknown_team:<name>`. In the sales profile the spam/other gate is its first rule, so a low-confidence spam email is now labelled `low_confidence` instead of `intent_spam` (it lands in review either way).
+
+The `ROUTING_*` variables in `.env` override the matching values of the active profile, so rep names can change without editing the YAML. Rep names are free text, so use descriptive ones. If you map reps to HubSpot owners with `HUBSPOT_OWNER_IDS`, the keys must match these names exactly.
+
+Evaluate a profile with its own labeled set: `docker compose run --rm api python eval/run_eval.py --file support_triage.jsonl --profile config/profiles/support.yaml`. Every key under `expected` except `team` is scored as an extracted field; `team` is scored as the routing outcome. `eval/support_triage.jsonl` is a small hand-written set (20 rows) for the support profile.
+
+The sales profile's order: spam and other go to review, then territory, then segment, then round-robin within the matching team.
 
 ## Commands
 
@@ -285,14 +313,14 @@ switchboard/
 ├── app/
 │   ├── api/            # FastAPI routes
 │   ├── workers/        # Celery tasks
-│   ├── extraction/     # LLM calls, fallback, batching, rate limits, schema
+│   ├── extraction/     # LLM calls, fallback, batching, rate limits
 │   ├── enrichment/     # Provider clients and cache
-│   ├── routing/        # Rule engine and round-robin
+│   ├── routing/        # Generic rule engine and round-robin
 │   ├── integrations/   # HubSpot and Slack clients
 │   ├── db/             # Models
 │   └── main.py
 ├── config/
-│   └── routing.yaml
+│   └── profiles/       # sales.yaml, support.yaml (pick one with PROFILE_PATH)
 ├── docs/               # architecture diagram (png + Mermaid source)
 ├── grafana/            # provisioned datasource and dashboard (optional profile)
 ├── eval/               # datasets, run_eval.py, results, .cache/

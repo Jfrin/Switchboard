@@ -45,8 +45,15 @@ def test_model_is_returned_with_llm_result():
 
 
 def test_prompts_tell_the_model_to_infer_country_from_cities():
-    from app.extraction.extractor import BATCH_SYSTEM_PROMPT, SYSTEM_PROMPT
+    from app.profile import get_profile
 
-    for prompt in (SYSTEM_PROMPT, BATCH_SYSTEM_PROMPT):
+    profile = get_profile()
+    for prompt in (profile.system_prompt, profile.batch_prompt):
         assert "Osaka -> JP" in prompt and "quoted or forwarded" in prompt
         assert "SEO" in prompt
+
+
+def test_null_choice_falls_back_to_its_default():
+    payload = json.dumps({"intent": None, "urgency": None, "confidence": 0.9})
+    lead = extract_lead("jane@acme.com", "s", "b", llm=lambda *a: payload)
+    assert lead.intent == "other" and lead.urgency == "medium"

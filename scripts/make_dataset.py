@@ -2,7 +2,7 @@
 
     docker compose run --rm api python scripts/make_dataset.py
 
-Expected team labels are derived from the same rules as config/routing.yaml
+Expected team labels are derived from the same rules as config/profiles/sales.yaml
 (territory + 500-employee enterprise threshold), so keep them in sync.
 """
 
