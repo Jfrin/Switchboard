@@ -18,6 +18,9 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("ADMIN_UI", "true")
     monkeypatch.setenv("ADMIN_TOKEN", "")
     monkeypatch.setenv("LLM_MODELS", "")
+    for var in ("SMB_REPS", "ENTERPRISE_REPS", "ENTERPRISE_MIN_EMPLOYEES", "TERRITORIES",
+                "FALLBACK_QUEUE"):  # .env / CI may set these; they would override the YAML
+        monkeypatch.setenv(f"ROUTING_{var}", "")
     get_settings.cache_clear()
     yield TestClient(app)
     get_settings.cache_clear()
