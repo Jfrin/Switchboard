@@ -29,6 +29,7 @@ BUSY = {"error": {"code": 503, "message": "high demand", "status": "UNAVAILABLE"
 
 @pytest.fixture(autouse=True)
 def _models(monkeypatch):
+    monkeypatch.setenv("LLM_MODELS", "")  # a real .env may set it; it beats GEMINI_MODELS
     monkeypatch.setenv("GEMINI_MODELS", "m1,m2")
     get_settings.cache_clear()
     ratelimit._local_exhausted.clear()

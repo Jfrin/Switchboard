@@ -9,6 +9,8 @@ import functools
 import json
 import os
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -289,13 +291,34 @@ def load_profile(path: str | Path) -> Profile:
 
 
 @functools.cache
-def _cached(path: str) -> Profile:
+def _cached(path: str, mtime_ns: int) -> Profile:
     return load_profile(path)
 
 
+_override: ContextVar[Profile | None] = ContextVar("profile_override", default=None)
+
+
+@contextmanager
+def use_profile(profile: Profile):
+    """Run a block against a draft profile (the admin page's tester) instead of the active one."""
+    token = _override.set(profile)
+    try:
+        yield profile
+    finally:
+        _override.reset(token)
+
+
 def get_profile() -> Profile:
-    """The active profile (PROFILE_PATH). Cached; get_profile.cache_clear() reloads it."""
-    return _cached(get_settings().profile_path)
+    """The active profile (PROFILE_PATH).
+
+    Cached per file modification time, so saving the file (from the admin page or by hand)
+    takes effect on the next message without a restart. get_profile.cache_clear() reloads it.
+    """
+    override = _override.get()
+    if override is not None:
+        return override
+    path = get_settings().profile_path
+    return _cached(path, os.stat(path).st_mtime_ns)
 
 
 get_profile.cache_clear = _cached.cache_clear  # type: ignore[attr-defined]

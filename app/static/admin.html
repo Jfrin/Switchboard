@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Switchboard profiles</title>
+<style>
+  :root {
+    --bg:#f6f7f9; --panel:#fff; --ink:#1b1f24; --muted:#667085; --line:#e1e4ea;
+    --accent:#2457d6; --ok:#157f3b; --bad:#b42318; --code:#f1f3f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12151a; --panel:#1a1e25; --ink:#e8ebf0; --muted:#9aa4b2; --line:#2c333d;
+            --accent:#6b93ff; --ok:#4cc27a; --bad:#ff7b72; --code:#12151a; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:14px/1.5 system-ui,-apple-system,Segoe UI,sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:12px 16px;
+           background:var(--panel); border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0 8px 0 0; }
+  main { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr); gap:14px; padding:14px 16px; }
+  @media (max-width:900px) { main { grid-template-columns:1fr; } }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:0 0 8px; }
+  select, input, button, textarea { font:inherit; color:inherit; background:var(--panel);
+          border:1px solid var(--line); border-radius:6px; padding:6px 10px; }
+  button { cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:disabled { opacity:.5; cursor:default; }
+  textarea { width:100%; font-family:ui-monospace,Consolas,monospace; font-size:13px; }
+  #yaml { height:62vh; resize:vertical; tab-size:2; white-space:pre; background:var(--code); }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:8px; }
+  .grow { flex:1; min-width:140px; }
+  #status { margin-top:8px; padding:8px 10px; border-radius:6px; background:var(--code); min-height:36px; }
+  #status.ok { color:var(--ok); } #status.bad { color:var(--bad); }
+  .tag { display:inline-block; padding:1px 8px; border-radius:99px; background:var(--code);
+         border:1px solid var(--line); margin:2px 4px 2px 0; font-size:12px; }
+  .muted { color:var(--muted); }
+  table { border-collapse:collapse; width:100%; }
+  td, th { text-align:left; padding:4px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  code, pre { font-family:ui-monospace,Consolas,monospace; font-size:12.5px; }
+  pre { background:var(--code); padding:8px; border-radius:6px; overflow:auto; margin:6px 0; }
+  .decision { font-size:15px; padding:10px; border-radius:6px; border:1px solid var(--line); }
+  .stack > * + * { margin-top:12px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:8px 0 2px; }
+  input.full { width:100%; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Switchboard profiles</h1>
+  <select id="profile" aria-label="Profile"></select>
+  <button id="new">New from this</button>
+  <span id="activeNote" class="muted"></span>
+  <span class="grow"></span>
+  <input id="token" type="password" placeholder="Admin token (if set)" size="18" aria-label="Admin token">
+</header>
+<main>
+  <div class="stack">
+    <section>
+      <h2>Profile file (YAML)</h2>
+      <textarea id="yaml" spellcheck="false" aria-label="Profile YAML"></textarea>
+      <div class="row">
+        <button class="primary" id="save">Save</button>
+        <button id="check">Validate</button>
+        <span class="muted">Checked as you type. Saving writes the file; it takes effect on the next message.</span>
+      </div>
+      <div id="status" role="status"></div>
+    </section>
+  </div>
+  <div class="stack">
+    <section>
+      <h2>What this profile does</h2>
+      <div id="summary" class="muted">Nothing to show yet.</div>
+    </section>
+    <section>
+      <h2>Try a message</h2>
+      <label for="from">From</label>
+      <input id="from" class="full" placeholder="sam@northwind.example">
+      <label for="subject">Subject</label>
+      <input id="subject" class="full">
+      <label for="body">Body</label>
+      <textarea id="body" rows="5"></textarea>
+      <div class="row">
+        <button class="primary" id="try">Extract and route</button>
+        <span class="muted">Uses the AI model, so it spends one request.</span>
+      </div>
+      <label for="facts">Or skip the AI: extracted values as JSON</label>
+      <textarea id="facts" rows="3" placeholder='{"intent":"outage","severity":"high","confidence":0.9}'></textarea>
+      <div class="row"><button id="tryFacts">Route these values</button></div>
+      <div id="result"></div>
+    </section>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const tokenKey = "switchboard-admin-token";
+try { $("token").value = sessionStorage.getItem(tokenKey) || ""; } catch (e) {}
+$("token").addEventListener("change", () => {
+  try { sessionStorage.setItem(tokenKey, $("token").value); } catch (e) {}
+  load();
+});
+
+async function api(path, opts = {}) {
+  const headers = { "Content-Type": "application/json" };
+  if ($("token").value) headers["X-Admin-Token"] = $("token").value;
+  const r = await fetch("/admin/api" + path, { ...opts, headers });
+  let data = {};
+  try { data = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error(data.detail || ("HTTP " + r.status));
+  return data;
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function status(msg, kind) { const el = $("status"); el.textContent = msg; el.className = kind || ""; }
+
+let active = "", current = "";
+async function load(selectName) {
+  try {
+    const list = await api("/profiles");
+    active = list.active;
+    $("profile").innerHTML = list.profiles.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join("");
+    const name = selectName || current || active;
+    if (list.profiles.includes(name)) $("profile").value = name;
+    await open($("profile").value);
+  } catch (e) { status(e.message, "bad"); }
+}
+async function open(name) {
+  const p = await api("/profiles/" + encodeURIComponent(name));
+  current = name;
+  $("yaml").value = p.yaml;
+  $("activeNote").textContent = name === active ? "active profile" : "not the active profile (PROFILE_PATH is " + active + ")";
+  validate();
+}
+$("profile").addEventListener("change", e => open(e.target.value).catch(x => status(x.message, "bad")));
+
+function renderSummary(s) {
+  const cond = (k, v) => {
+    if (Array.isArray(v)) return `${esc(k)} is one of ${esc(v.join(", "))}`;
+    if (v && typeof v === "object") return Object.entries(v).map(([op, a]) =>
+      op === "exists" ? `${esc(k)} ${a ? "is known" : "is missing"}` : `${esc(k)} ${esc(op)} ${esc(JSON.stringify(a))}`).join(" and ");
+    return `${esc(k)} = ${esc(v)}`;
+  };
+  const when = w => w === "always" ? "always" : Object.entries(w).map(([k, v]) => cond(k, v)).join(" and ");
+  const to = t => { const [k, v] = Object.entries(t)[0]; return `${esc(k)} <b>${esc(v)}</b>`; };
+  $("summary").className = "";
+  $("summary").innerHTML =
+    `<p><b>${esc(s.name)}</b> · CRM ${s.crm ? "on" : "off"} · Slack ${s.slack ? "on" : "off"} · fallback queue <code>${esc(s.fallback_queue)}</code></p>` +
+    `<p class="muted">Categories</p>${s.categories.map(c => `<span class="tag">${esc(c)}</span>`).join("")}` +
+    `<p class="muted">Fields</p>${Object.entries(s.fields).map(([k, t]) => `<span class="tag">${esc(k)}: ${esc(t)}</span>`).join("")}` +
+    (s.derived.length ? `<p class="muted">Derived</p>${s.derived.map(d => `<span class="tag">${esc(d)}</span>`).join("")}` : "") +
+    `<p class="muted">Teams</p>${Object.entries(s.teams).map(([t, r]) => `<span class="tag">${esc(t)}: ${esc(r.join(", "))}</span>`).join("")}` +
+    `<p class="muted">Rules, first match wins</p><table>${s.rules.map((r, i) =>
+      `<tr><td>${i + 1}</td><td>${when(r.when)}</td><td>→ ${to(r.to)}</td><td class="muted">${esc(r.label)}</td></tr>`).join("")}</table>`;
+}
+
+let timer;
+async function validate() {
+  clearTimeout(timer);
+  try {
+    const r = await api("/validate", { method: "POST", body: JSON.stringify({ yaml: $("yaml").value }) });
+    renderSummary(r.summary);
+    status("Valid.", "ok");
+    return true;
+  } catch (e) { status(e.message, "bad"); return false; }
+}
+$("yaml").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(validate, 500); });
+$("check").addEventListener("click", validate);
+$("save").addEventListener("click", async () => {
+  try {
+    const r = await api("/profiles/" + encodeURIComponent(current), { method: "PUT", body: JSON.stringify({ yaml: $("yaml").value }) });
+    renderSummary(r.summary);
+    status(`Saved config/profiles/${current}.yaml.` + (r.active ? " It is the active profile, so new messages use it now." : " It is not the active profile; set PROFILE_PATH to use it."), "ok");
+  } catch (e) { status("Not saved: " + e.message, "bad"); }
+});
+$("new").addEventListener("click", async () => {
+  const name = (prompt("Name for the new profile (a-z, 0-9, - and _):") || "").trim();
+  if (!name) return;
+  try {
+    await api("/profiles/" + encodeURIComponent(name), { method: "PUT", body: JSON.stringify({ yaml: $("yaml").value.replace(/^name:.*$/m, "name: " + name) }) });
+    await load(name);
+    status(`Created ${name}.yaml as a copy. Edit it and save.`, "ok");
+  } catch (e) { status("Not created: " + e.message, "bad"); }
+});
+
+function renderResult(r) {
+  const d = r.decision;
+  const kv = o => Object.entries(o).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v === null ? '<span class="muted">null</span>' : esc(v)}</td></tr>`).join("");
+  $("result").innerHTML =
+    `<div class="decision" style="margin-top:10px"><b>${d.rep ? esc(d.team) + " → " + esc(d.rep) : esc(d.team) + " (no rep)"}</b><br>` +
+    `<span class="muted">rule:</span> <code>${esc(d.rule)}</code> · <span class="muted">confidence</span> ${esc(d.confidence)} <span class="muted">(threshold ${esc(r.threshold)})</span></div>` +
+    `<h2 style="margin-top:12px">Extracted${r.model ? " by " + esc(r.model) : ""}</h2><table>${kv(r.extracted)}</table>` +
+    (Object.keys(r.after_enrichment).length ? `<h2 style="margin-top:12px">Filled from enrichment</h2><table>${kv(r.after_enrichment)}</table>` : "") +
+    (Object.keys(r.derived).length ? `<h2 style="margin-top:12px">Derived</h2><table>${kv(r.derived)}</table>` : "") +
+    `<p class="muted">${esc(r.note)}</p>`;
+}
+async function run(payload, btn) {
+  btn.disabled = true; $("result").innerHTML = '<p class="muted">Working…</p>';
+  try { renderResult(await api("/try", { method: "POST", body: JSON.stringify({ yaml: $("yaml").value, ...payload }) })); }
+  catch (e) { $("result").innerHTML = `<p style="color:var(--bad)">${esc(e.message)}</p>`; }
+  btn.disabled = false;
+}
+$("try").addEventListener("click", e => run({ sender: $("from").value, subject: $("subject").value, body: $("body").value }, e.target));
+$("tryFacts").addEventListener("click", e => {
+  let facts;
+  try { facts = JSON.parse($("facts").value); } catch (x) { $("result").innerHTML = '<p style="color:var(--bad)">That is not valid JSON.</p>'; return; }
+  run({ facts }, e.target);
+});
+load();
+</script>
+</body>
+</html>

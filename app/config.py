@@ -37,6 +37,10 @@ class Settings(BaseSettings):
 
     slack_webhook_url: str = ""
 
+    # The profile editor page (/admin). Off by default: it can rewrite files in config/profiles.
+    admin_ui: bool = False
+    admin_token: str = ""  # if set, the page and its API require it
+
     log_format: str = "json"  # json | text
     log_level: str = "INFO"
 

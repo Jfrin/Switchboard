@@ -113,6 +113,7 @@ Environment variables (see `.env.example`):
 | `ENRICHMENT_PROVIDER` | `mock` (Apollo/Hunter not implemented yet) |
 | `LOG_FORMAT` / `LOG_LEVEL` | `json` (default) or `text`; log level (default `INFO`) |
 | `GRAFANA_ADMIN_PASSWORD` | Admin password for the optional Grafana service (default `admin`) |
+| `ADMIN_UI` / `ADMIN_TOKEN` | `ADMIN_UI=true` turns on the profile editor at `/admin` (default off). `ADMIN_TOKEN` is required in the `X-Admin-Token` header when set |
 | `PROFILE_PATH` | Profile to run (default `config/profiles/sales.yaml`; see Profiles below) |
 | `ROUTING_SMB_REPS` / `ROUTING_ENTERPRISE_REPS` | Comma-separated rep names per team, e.g. `smb-apac-1,smb-emea-1`. Empty uses the profile's own list |
 | `ROUTING_TEAM_<NAME>_REPS` | Same for any team in any profile, e.g. `ROUTING_TEAM_BILLING_REPS=grace,heidi` |
@@ -187,6 +188,18 @@ Conditions in `when` are all required. `intent: [a, b]` means "is one of", `seve
 Checks that always run first, in every profile: a message every model refused goes to the fallback queue (`fallback:content_filtered`), then anything under `CONFIDENCE_THRESHOLD` (`fallback:low_confidence`). If no rule matches, it goes to the fallback queue as `fallback:no_match`; a rule that names a team that does not exist gives `fallback:unknown_team:<name>`. In the sales profile the spam/other gate is its first rule, so a low-confidence spam email is now labelled `low_confidence` instead of `intent_spam` (it lands in review either way).
 
 The `ROUTING_*` variables in `.env` override the matching values of the active profile, so rep names can change without editing the YAML. Rep names are free text, so use descriptive ones. If you map reps to HubSpot owners with `HUBSPOT_OWNER_IDS`, the keys must match these names exactly.
+
+#### Profile editor
+
+Set `ADMIN_UI=true` (and an `ADMIN_TOKEN`) in `.env`, recreate `api`, and open `http://localhost:8000/admin`. It is a YAML editor with:
+
+- live validation (the error names the field or rule that is wrong; a file that does not validate is never saved)
+- a readable summary of the categories, fields, teams and rules
+- **Save** (takes effect on the next message, no restart; the profile file is re-read when it changes)
+- **New from this** to copy a profile under a new name
+- a tester: paste an email to see what the AI extracts and where it would route, or paste extracted values as JSON to test only the rules without spending a model request. The tester does not move the live round-robin counter.
+
+It edits the files in `config/profiles/`. Which profile is active is still `PROFILE_PATH` in `.env`. The page can rewrite files, so leave it off unless you are using it, and do not expose port 8000 without a token.
 
 Evaluate a profile with its own labeled set: `docker compose run --rm api python eval/run_eval.py --file support_triage.jsonl --profile config/profiles/support.yaml`. Every key under `expected` except `team` is scored as an extracted field; `team` is scored as the routing outcome. `eval/support_triage.jsonl` is a small hand-written set (20 rows) for the support profile.
 
@@ -311,7 +324,8 @@ docker compose logs worker --tail 20
 ```
 switchboard/
 ├── app/
-│   ├── api/            # FastAPI routes
+│   ├── api/            # FastAPI routes, metrics, profile editor (admin.py)
+│   ├── static/         # admin.html
 │   ├── workers/        # Celery tasks
 │   ├── extraction/     # LLM calls, fallback, batching, rate limits
 │   ├── enrichment/     # Provider clients and cache
