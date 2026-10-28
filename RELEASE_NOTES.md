@@ -1,28 +1,21 @@
-First stable release of Switchboard: an inbound lead routing service. It takes sales inquiries (email or web form), extracts structured data with an LLM, enriches the lead, routes it by territory and company size with round-robin assignment, creates the contact and deal in HubSpot, alerts the rep in Slack, and records every decision in an audit log. Everything runs in Docker.
+Switchboard now routes more than sales leads. A **profile** file decides what the AI reads and how items are routed, and a small web page edits profiles. This release also adds observability.
 
-## Highlights
-- **Pipeline:** FastAPI ingest, Redis queue, Celery worker, Postgres
-- **LLM extraction** with Pydantic validation, one retry, and a regex fallback
-- **Model fallback:** an ordered list of Azure AI Foundry and Gemini models, with per-model rate limits, daily-quota tracking shared across workers, and failover on outages and content-filter refusals
-- **Routing engine:** intent gate, confidence threshold, territory, segment, then round-robin, with rules in `config/routing.yaml`
-- **Review queue** for spam, low-confidence, no-territory and content-filtered leads, with the rule recorded in the audit log
-- **HubSpot** contact and deal creation (idempotent), deal owner set to the assigned rep
-- **Slack** alerts with a lead summary and deal link
-- **Evaluation harness:** dev and test splits, per-model and per-batch-size reports, resumable runs
-- **Seed script** for a one-command demo: `docker compose exec api python scripts/seed.py`
+## What's new
+- **Profiles:** one YAML file defines categories, extracted fields, derived fields, teams and ordered routing rules. One profile is active at a time (`PROFILE_PATH` in `.env`). HubSpot and Slack are per-profile on/off switches.
+- **Two profiles included:** `sales` (the previous behavior, now the default) and `support` (ticket triage: outage, bug, billing, and so on, routed by category, severity and plan).
+- **Profile editor at `/admin`** (off by default, `ADMIN_UI=true`): YAML editor with live validation, a rule summary, save, copy, and a tester that shows what the AI extracts and where a message would route. Edits apply to the next message without a restart.
+- **Observability:** JSON logs, a `/metrics` endpoint, and a provisioned Grafana dashboard (optional compose profile `observability`).
+- **Eval:** `run_eval.py --profile` scores any profile; a 20-row hand-written set for the support profile is included.
+- **Env overrides:** `ROUTING_*` still override the profile; new `ROUTING_TEAM_<NAME>_REPS` works for any team.
 
-## Evaluation (synthetic data)
-On 120 synthetic emails with `azure:gpt-4.1-mini`: routing accuracy 97.5% (99.2% excluding two rows whose labels conflict with the mock enrichment table) and intent accuracy 100%. These are synthetic and hand-written datasets, not real customer email. Details are in `eval/results*.md`.
+## Upgrading from v1.0.0
+- `config/routing.yaml` is replaced by `config/profiles/sales.yaml`. In `.env`, remove `ROUTING_CONFIG_PATH` and add `PROFILE_PATH=config/profiles/sales.yaml`.
+- A low-confidence spam email is now labelled `fallback:low_confidence` instead of `fallback:intent_spam`. It still goes to review.
+- The sales profile no longer extracts a separate `region` field; `region` is now computed from `country`.
+- Rebuild: `docker compose up -d --build --force-recreate api worker`
 
 ## Known limitations
-- Enrichment uses a mock provider; Apollo and Hunter are not implemented yet
-- Failed leads are marked `failed` with the error; there is no separate dead-letter queue
-- Repeat senders are not pinned to their first rep
-- No metrics dashboard yet
-
-## Quick start
-```
-cp .env.example .env
-docker compose up -d --build
-docker compose exec api python scripts/seed.py
-```
+- The support profile has only been checked with a stub model, not scored against a real one
+- The profile editor is a YAML editor, not forms, and the active profile is still chosen in `.env`
+- Enrichment uses a mock provider; Apollo and Hunter are not implemented
+- No dead-letter queue, and repeat senders are not pinned to their first rep
