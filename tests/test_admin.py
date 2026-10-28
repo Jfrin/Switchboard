@@ -104,3 +104,37 @@ def test_try_with_a_message_uses_the_draft_profile(client, monkeypatch):
     r = client.post("/admin/api/try", json={"yaml": support, "body": "site is down"}).json()
     assert "severity" in seen["fields"] and "urgency" not in seen["fields"]
     assert r["decision"]["team"] == "oncall" and r["model"] == "stub"
+
+
+def test_form_round_trip_keeps_the_profile_valid(client):
+    support = open("config/profiles/support.yaml", encoding="utf-8").read()
+    data = client.post("/admin/api/to-form", json={"yaml": support}).json()["data"]
+    assert data["teams"]["billing"]["reps"] == ["grace", "heidi"]
+    data["teams"]["billing"]["reps"] = ["zed"]
+    text = client.post("/admin/api/from-form", json={"data": data}).json()["yaml"]
+    out = client.post("/admin/api/validate", json={"yaml": text}).json()
+    assert out["summary"]["teams"]["billing"] == ["zed"]
+    assert out["summary"]["rules"][0]["label"] == "fallback:intent_{intent}"
+
+
+def test_to_form_rejects_broken_yaml(client):
+    assert client.post("/admin/api/to-form", json={"yaml": "a: [oops"}).status_code == 400
+
+
+def test_make_active_switches_the_profile_everyone_uses(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("PROFILE_PATH", str(tmp_path / "profiles" / "sales.yaml"))
+    get_settings.cache_clear()
+    get_profile.cache_clear()
+    assert get_profile().name == "sales"
+    assert client.get("/admin/api/profiles").json()["active"] == "sales"
+    r = client.post("/admin/api/active/support")
+    assert r.status_code == 200 and r.json() == {"active": "support"}
+    get_profile.cache_clear()
+    assert get_profile().name == "support"
+    assert client.get("/admin/api/profiles").json()["active"] == "support"
+
+
+def test_cannot_activate_a_missing_or_broken_profile(client, tmp_path, monkeypatch):
+    assert client.post("/admin/api/active/nope").status_code == 404
+    (tmp_path / "profiles" / "broken.yaml").write_text("name: x\n", encoding="utf-8")
+    assert client.post("/admin/api/active/broken").status_code == 400

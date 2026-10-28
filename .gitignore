@@ -27,3 +27,5 @@ redis_data/
 .idea/
 .DS_Store
 eval/.cache/
+
+config/active_profile.txt

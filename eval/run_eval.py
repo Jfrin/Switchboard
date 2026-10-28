@@ -36,7 +36,7 @@ from app.extraction.extractor import (
     extract_lead_with_model,
     extract_leads_batch,
 )
-from app.profile import get_profile
+from app.profile import get_profile, load_profile, pin_profile
 from app.routing.engine import route
 
 ROOT = Path(__file__).parent
@@ -86,8 +86,10 @@ def main() -> None:
         get_settings.cache_clear()
     settings = get_settings()
     if args.profile:
-        settings.profile_path = args.profile
-    profile = get_profile()
+        profile = load_profile(args.profile)
+        pin_profile(profile)  # ignore the editor's active-profile choice for this run
+    else:
+        profile = get_profile()
     Lead = profile.model
     model_list = settings.gemini_model_list
     path = ROOT / args.file

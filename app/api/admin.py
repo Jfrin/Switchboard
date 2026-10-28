@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from app.config import get_settings
 from app.enrichment import enrich
 from app.extraction.extractor import LLMUnavailable, extract_lead_with_model
-from app.profile import Profile, ProfileError, apply_env_overrides, use_profile
+from app.profile import Profile, ProfileError, active_path, apply_env_overrides, use_profile
 from app.routing.engine import route, with_derived
 
 PROFILES_DIR = Path("config/profiles")
@@ -101,7 +101,7 @@ def page() -> str:
 @api.get("/profiles")
 def list_profiles() -> dict:
     files = sorted(p.stem for p in PROFILES_DIR.glob("*.yaml"))
-    return {"profiles": files, "active": Path(get_settings().profile_path).stem}
+    return {"profiles": files, "active": Path(active_path()).stem}
 
 
 @api.get("/profiles/{name}")
@@ -125,8 +125,45 @@ def save_profile(name: str, draft: Draft) -> dict:
     tmp = path.with_suffix(".yaml.tmp")
     tmp.write_text(draft.yaml, encoding="utf-8")
     tmp.replace(path)
-    active = Path(get_settings().profile_path).stem == name
+    active = Path(active_path()).stem == name
     return {"saved": name, "active": active, "summary": _summary(profile)}
+
+
+@api.post("/active/{name}")
+def make_active(name: str) -> dict:
+    """Make this profile the one the API and worker use (stored in ACTIVE_PROFILE_FILE)."""
+    path = _path(name)
+    if not path.exists():
+        raise HTTPException(404, "no such profile")
+    _compile(path.read_text(encoding="utf-8"))  # never activate a file that would not load
+    target = Path(get_settings().active_profile_file)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(name + "\n", encoding="utf-8")
+    return {"active": name}
+
+
+@api.post("/to-form")
+def to_form(draft: Draft) -> dict:
+    """The YAML as plain data, for the form editor (comments are not kept)."""
+    try:
+        data = yaml.safe_load(draft.yaml)
+    except yaml.YAMLError as exc:
+        raise HTTPException(400, f"not valid YAML: {exc}") from exc
+    if not isinstance(data, dict):
+        raise HTTPException(400, "the profile must be a YAML mapping")
+    return {"data": data}
+
+
+class FormData(BaseModel):
+    data: dict
+
+
+@api.post("/from-form")
+def from_form(form: FormData) -> dict:
+    text = yaml.safe_dump(
+        form.data, sort_keys=False, allow_unicode=True, default_flow_style=False, width=100
+    )
+    return {"yaml": text}
 
 
 @api.post("/try")

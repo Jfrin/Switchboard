@@ -156,7 +156,7 @@ A profile is one YAML file that says what the AI reads and how items are routed,
 | `config/profiles/sales.yaml` | Default. Sales inquiries: territory and company size, round-robin, HubSpot and Slack |
 | `config/profiles/support.yaml` | Example. Support-ticket triage: outage, bug, billing, and so on, routed by category, severity and plan; Slack only |
 
-To switch, set `PROFILE_PATH=config/profiles/support.yaml` in `.env` and recreate the containers (`docker compose up -d --force-recreate api worker`). To make your own, copy one and edit it. A bad profile stops startup with a message that names the rule or field that is wrong.
+To switch, set `PROFILE_PATH=config/profiles/support.yaml` in `.env` and recreate the containers (`docker compose up -d --force-recreate api worker`), or use **Make active** in the profile editor below. To make your own, copy one and edit it. A bad profile stops startup with a message that names the rule or field that is wrong.
 
 ```yaml
 name: support
@@ -187,6 +187,8 @@ Conditions in `when` are all required. `intent: [a, b]` means "is one of", `seve
 
 Checks that always run first, in every profile: a message every model refused goes to the fallback queue (`fallback:content_filtered`), then anything under `CONFIDENCE_THRESHOLD` (`fallback:low_confidence`). If no rule matches, it goes to the fallback queue as `fallback:no_match`; a rule that names a team that does not exist gives `fallback:unknown_team:<name>`. In the sales profile the spam/other gate is its first rule, so a low-confidence spam email is now labelled `low_confidence` instead of `intent_spam` (it lands in review either way).
 
+`sticky_reps: true` (the default; set `false` at the top level of a profile to turn it off) sends a repeat sender to the rep they were last routed to, as long as that rep is in the team the rules pick. Other senders get round-robin as usual.
+
 The `ROUTING_*` variables in `.env` override the matching values of the active profile, so rep names can change without editing the YAML. Rep names are free text, so use descriptive ones. If you map reps to HubSpot owners with `HUBSPOT_OWNER_IDS`, the keys must match these names exactly.
 
 #### Profile editor
@@ -195,15 +197,26 @@ Set `ADMIN_UI=true` (and an `ADMIN_TOKEN`) in `.env`, recreate `api`, and open `
 
 - live validation (the error names the field or rule that is wrong; a file that does not validate is never saved)
 - a readable summary of the categories, fields, teams and rules
+- a **Form** tab for the common edits (categories, fields, teams, rules with conditions, integrations) next to the **YAML** tab. Form edits rewrite the file without its comments; derived fields and category descriptions are edited in YAML
+- **Make active**: switches the profile the API and the worker use, without touching `.env` (the choice is stored in `config/active_profile.txt`, which wins over `PROFILE_PATH`; delete that file to go back to `PROFILE_PATH`)
 - **Save** (takes effect on the next message, no restart; the profile file is re-read when it changes)
 - **New from this** to copy a profile under a new name
 - a tester: paste an email to see what the AI extracts and where it would route, or paste extracted values as JSON to test only the rules without spending a model request. The tester does not move the live round-robin counter.
 
-It edits the files in `config/profiles/`. Which profile is active is still `PROFILE_PATH` in `.env`. The page can rewrite files, so leave it off unless you are using it, and do not expose port 8000 without a token.
+It edits the files in `config/profiles/`. The page can rewrite files, so leave it off unless you are using it, and do not expose port 8000 without a token.
 
 Evaluate a profile with its own labeled set: `docker compose run --rm api python eval/run_eval.py --file support_triage.jsonl --profile config/profiles/support.yaml`. Every key under `expected` except `team` is scored as an extracted field; `team` is scored as the routing outcome. `eval/support_triage.jsonl` is a small hand-written set (20 rows) for the support profile.
 
 The sales profile's order: spam and other go to review, then territory, then segment, then round-robin within the matching team.
+
+### Failed leads
+
+A lead that fails after its retries is kept with `status=failed` and the error (list them with `GET /leads?status=failed`). Put them back on the queue once the cause is fixed:
+
+```bash
+docker compose exec api python -c "import httpx; print(httpx.post('http://localhost:8000/leads/retry-failed').text)"   # all failed leads
+docker compose exec api python -c "import httpx; print(httpx.post('http://localhost:8000/leads/<id>/retry').text)"    # one lead
+```
 
 ## Commands
 

@@ -45,6 +45,17 @@
   .stack > * + * { margin-top:12px; }
   label { display:block; font-size:12px; color:var(--muted); margin:8px 0 2px; }
   input.full { width:100%; }
+  .tabs { display:flex; gap:4px; margin-bottom:8px; }
+  .tab.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  #formBox { max-height:62vh; overflow:auto; padding-right:4px; }
+  #formBox h3 { font-size:13px; margin:16px 0 6px; padding-top:10px; border-top:1px solid var(--line); }
+  #formBox h3:first-child { border:0; margin-top:0; padding-top:0; }
+  .fr { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:4px 0; }
+  .fr input, .fr select { min-width:0; }
+  .fr .w1 { width:110px; } .fr .w2 { flex:1; min-width:120px; } .fr .w3 { width:70px; }
+  .small { padding:2px 8px; font-size:12px; }
+  .box { border:1px solid var(--line); border-radius:6px; padding:8px; margin:6px 0; }
+  .note { font-size:12px; color:var(--muted); margin:4px 0; }
 </style>
 </head>
 <body>
@@ -52,6 +63,7 @@
   <h1>Switchboard profiles</h1>
   <select id="profile" aria-label="Profile"></select>
   <button id="new">New from this</button>
+  <button id="activate">Make active</button>
   <span id="activeNote" class="muted"></span>
   <span class="grow"></span>
   <input id="token" type="password" placeholder="Admin token (if set)" size="18" aria-label="Admin token">
@@ -59,7 +71,11 @@
 <main>
   <div class="stack">
     <section>
-      <h2>Profile file (YAML)</h2>
+      <div class="tabs" role="tablist">
+        <button id="tabYaml" class="tab on" role="tab">YAML</button>
+        <button id="tabForm" class="tab" role="tab">Form</button>
+      </div>
+      <div id="formBox" hidden></div>
       <textarea id="yaml" spellcheck="false" aria-label="Profile YAML"></textarea>
       <div class="row">
         <button class="primary" id="save">Save</button>
@@ -129,6 +145,7 @@ async function open(name) {
   const p = await api("/profiles/" + encodeURIComponent(name));
   current = name;
   $("yaml").value = p.yaml;
+  if (formOn) showTab(true);
   $("activeNote").textContent = name === active ? "active profile" : "not the active profile (PROFILE_PATH is " + active + ")";
   validate();
 }
@@ -206,6 +223,197 @@ $("tryFacts").addEventListener("click", e => {
   try { facts = JSON.parse($("facts").value); } catch (x) { $("result").innerHTML = '<p style="color:var(--bad)">That is not valid JSON.</p>'; return; }
   run({ facts }, e.target);
 });
+
+// ---- make active ------------------------------------------------------------------
+$("activate").addEventListener("click", async () => {
+  try {
+    await api("/active/" + encodeURIComponent(current), { method: "POST" });
+    active = current;
+    $("activeNote").textContent = "active profile";
+    status(`${current} is now the active profile for the API and the worker.`, "ok");
+  } catch (e) { status("Not activated: " + e.message, "bad"); }
+});
+
+// ---- form editor ------------------------------------------------------------------
+let data = null, formOn = false, formTimer;
+const csv = v => String(v).split(",").map(x => x.trim()).filter(Boolean);
+const num = v => (v !== "" && !isNaN(Number(v))) ? Number(v) : v;
+const OPS = [["eq","is"],["in","is one of"],["not_in","is not one of"],["gt",">"],["gte",">="],["lt","<"],["lte","<="],["contains","contains"],["exists","exists"]];
+
+function toRows(when) {
+  const rows = [];
+  for (const [f, c] of Object.entries(when || {})) {
+    if (Array.isArray(c)) rows.push({ f, op: "in", v: c.join(", ") });
+    else if (c && typeof c === "object") for (const [op, a] of Object.entries(c))
+      rows.push({ f, op, v: Array.isArray(a) ? a.join(", ") : String(a) });
+    else rows.push({ f, op: "eq", v: String(c) });
+  }
+  return rows;
+}
+function fromRows(rows) {
+  const by = {};
+  rows.filter(r => r.f).forEach(r => (by[r.f] = by[r.f] || []).push(r));
+  const when = {};
+  for (const [f, rs] of Object.entries(by)) {
+    const val = r => r.op === "in" || r.op === "not_in" ? csv(r.v)
+      : r.op === "exists" ? r.v !== "false"
+      : r.op === "eq" && (r.v === "true" || r.v === "false") ? r.v === "true" : num(r.v);
+    if (rs.length === 1 && rs[0].op === "eq") when[f] = val(rs[0]);
+    else if (rs.length === 1 && rs[0].op === "in") when[f] = val(rs[0]);
+    else when[f] = Object.fromEntries(rs.map(r => [r.op, val(r)]));
+  }
+  return when;
+}
+function fieldNames() {
+  return ["intent", "email", "phone", "domain", "confidence", ...Object.keys(data.fields || {}), ...Object.keys(data.derived || {})];
+}
+const opt = (list, sel) => list.map(x => { const [v, l] = Array.isArray(x) ? x : [x, x]; return `<option value="${esc(v)}"${v === sel ? " selected" : ""}>${esc(l)}</option>`; }).join("");
+
+function renderForm() {
+  const d = data;
+  d.fields = d.fields || {}; d.teams = d.teams || {}; d.rules = d.rules || [];
+  d.integrations = d.integrations || {}; d.enrichment = d.enrichment || {};
+  const names = fieldNames();
+  let h = `<h3>Basics</h3>
+    <div class="fr"><input class="w1" data-k="name" value="${esc(d.name || "")}" placeholder="name">
+      <input class="w1" data-k="item_name" value="${esc(d.item_name || "")}" placeholder="item name (lead, ticket)">
+      <input class="w2" data-k="subject" value="${esc(d.subject || "")}" placeholder="what the messages are"></div>
+    <div class="fr"><input class="w2" data-k="fallback_queue" value="${esc(d.fallback_queue || "")}" placeholder="fallback queue">
+      <label class="fr" style="margin:0"><input type="checkbox" data-k="sticky_reps" ${d.sticky_reps === false ? "" : "checked"}> repeat senders keep their rep</label></div>
+    <h3>Categories</h3>
+    <div class="fr"><input class="w2" data-k="categories" value="${esc((d.categories || []).join(", "))}" placeholder="comma separated">
+      <select data-k="default_category">${opt(d.categories || [], d.default_category)}</select></div>
+    <p class="note">Left: the choices the AI picks from. Right: used when it is unsure. Describe each category in the YAML tab under category_help.</p>
+    <h3>Extra instructions for the AI</h3>
+    <textarea rows="3" data-k="instructions" placeholder="optional">${esc(d.instructions || "")}</textarea>
+    <h3>Fields the AI extracts</h3>`;
+  Object.entries(d.fields).forEach(([k, f], i) => {
+    f = f || {};
+    h += `<div class="box" data-field="${esc(k)}"><div class="fr">
+      <input class="w1" data-fk="name" value="${esc(k)}">
+      <select class="w1" data-fk="type">${opt(["string", "integer", "number", "boolean", "choice"], f.type || "string")}</select>
+      ${f.type === "choice" ? `<input class="w2" data-fk="values" value="${esc((f.values || []).join(", "))}" placeholder="values, comma separated"><input class="w1" data-fk="default" value="${esc(f.default ?? "")}" placeholder="default">` : ""}
+      <button class="small" data-del-field="${esc(k)}">Remove</button></div>
+      <input class="full" data-fk="description" value="${esc(f.description || "")}" placeholder="description the AI reads"></div>`;
+  });
+  h += `<button class="small" id="addField">Add field</button>
+    <p class="note">Derived fields (like region from country) are edited in the YAML tab.</p>
+    <h3>Teams</h3>`;
+  Object.entries(d.teams).forEach(([t, v]) => {
+    h += `<div class="fr" data-team="${esc(t)}"><input class="w1" data-tk="name" value="${esc(t)}"><input class="w2" data-tk="reps" value="${esc(((v || {}).reps || []).join(", "))}" placeholder="reps, comma separated"><button class="small" data-del-team="${esc(t)}">Remove</button></div>`;
+  });
+  h += `<button class="small" id="addTeam">Add team</button><h3>Rules (first match wins)</h3>`;
+  d.rules.forEach((r, i) => {
+    const rows = toRows(r.when);
+    const [kind, target] = Object.entries(r.to || { team: "" })[0];
+    h += `<div class="box" data-rule="${i}">
+      <div class="fr"><b>${i + 1}</b><span class="grow"></span>
+        <button class="small" data-up="${i}">Up</button><button class="small" data-down="${i}">Down</button><button class="small" data-del-rule="${i}">Remove</button></div>
+      <div class="note">${rows.length ? "When all of these are true:" : "Always (no conditions)"}</div>`;
+    rows.forEach((c, j) => {
+      h += `<div class="fr" data-cond="${j}"><select class="w1" data-ck="f">${opt(names, c.f)}</select>
+        <select class="w1" data-ck="op">${opt(OPS, c.op)}</select>
+        ${c.op === "exists" ? `<select class="w1" data-ck="v">${opt([["true", "yes"], ["false", "no"]], c.v)}</select>` : `<input class="w2" data-ck="v" value="${esc(c.v)}">`}
+        <button class="small" data-del-cond="${j}">x</button></div>`;
+    });
+    h += `<button class="small" data-add-cond="${i}">Add condition</button>
+      <div class="fr"><span>Send to</span><select class="w1" data-rk="kind">${opt([["team", "team"], ["queue", "queue"]], kind)}</select>
+        <input class="w2" data-rk="target" value="${esc(target)}" placeholder="team or queue name, {field} allowed">
+        <input class="w2" data-rk="label" value="${esc(r.label || "")}" placeholder="label for the audit log"></div></div>`;
+  });
+  h += `<button class="small" id="addRule">Add rule</button>
+    <h3>Integrations</h3>
+    <div class="fr"><label class="fr" style="margin:0"><input type="checkbox" data-ik="crm" ${d.integrations.crm ? "checked" : ""}> CRM (HubSpot)</label>
+      <label class="fr" style="margin:0"><input type="checkbox" data-ik="slack" ${d.integrations.slack ? "checked" : ""}> Slack</label></div>
+    <div class="fr"><input class="w2" data-ik="title_field" value="${esc(d.integrations.title_field || "")}" placeholder="title field">
+      <input class="w2" data-ik="summary_fields" value="${esc((d.integrations.summary_fields || []).join(", "))}" placeholder="Slack summary fields"></div>
+    <div class="fr"><input class="w2" data-en="fill" value="${esc((d.enrichment.fill || []).join(", "))}" placeholder="fill from enrichment when missing (fields)"></div>`;
+  $("formBox").innerHTML = h;
+}
+
+function changed() { clearTimeout(formTimer); formTimer = setTimeout(pushForm, 300); }
+async function pushForm() {
+  try {
+    const r = await api("/from-form", { method: "POST", body: JSON.stringify({ data }) });
+    $("yaml").value = r.yaml;
+    validate();
+  } catch (e) { status(e.message, "bad"); }
+}
+function rerender() { renderForm(); changed(); }
+const clean = o => { Object.keys(o).forEach(k => { if (o[k] === "" || (Array.isArray(o[k]) && !o[k].length)) delete o[k]; }); return o; };
+
+$("formBox").addEventListener("change", e => {
+  const t = e.target, d = data;
+  const box = t.closest("[data-field]"), team = t.closest("[data-team]"), rule = t.closest("[data-rule]");
+  if (t.dataset.k) {
+    const k = t.dataset.k;
+    d[k] = t.type === "checkbox" ? t.checked : k === "categories" ? csv(t.value) : t.value;
+    if (k === "categories") { if (!d.categories.includes(d.default_category)) d.default_category = d.categories[d.categories.length - 1]; rerender(); return; }
+    if (d[k] === "" || (k === "sticky_reps" && d[k])) delete d[k];
+  } else if (t.dataset.fk && box) {
+    const old = box.dataset.field, f = d.fields[old] || {}, k = t.dataset.fk;
+    if (k === "name") { const nf = {}; Object.entries(d.fields).forEach(([n, v]) => nf[n === old ? t.value : n] = v); d.fields = nf; }
+    else if (k === "values") f.values = csv(t.value);
+    else if (k === "type") { f.type = t.value; if (t.value === "choice" && !f.values) f.values = []; rerender(); }
+    else f[k] = t.value;
+    d.fields[k === "name" ? t.value : old] = clean(f);
+  } else if (t.dataset.tk && team) {
+    const old = team.dataset.team;
+    if (t.dataset.tk === "name") { const nt = {}; Object.entries(d.teams).forEach(([n, v]) => nt[n === old ? t.value : n] = v); d.teams = nt; }
+    else d.teams[old] = { ...(d.teams[old] || {}), reps: csv(t.value) };
+  } else if (rule) {
+    const i = +rule.dataset.rule, r = d.rules[i];
+    if (t.dataset.ck) {
+      const rows = toRows(r.when), j = +t.closest("[data-cond]").dataset.cond;
+      rows[j][t.dataset.ck] = t.value;
+      if (t.dataset.ck === "op") rows[j].v = t.value === "exists" ? "true" : rows[j].v;
+      r.when = fromRows(rows); if (!Object.keys(r.when).length) delete r.when;
+      rerender(); return;
+    }
+    if (t.dataset.rk) {
+      const kind = rule.querySelector('[data-rk="kind"]').value, target = rule.querySelector('[data-rk="target"]').value;
+      r.to = { [kind]: target };
+      const label = rule.querySelector('[data-rk="label"]').value; if (label) r.label = label; else delete r.label;
+    }
+  } else if (t.dataset.ik) {
+    const k = t.dataset.ik;
+    d.integrations[k] = t.type === "checkbox" ? t.checked : k === "summary_fields" ? csv(t.value) : t.value;
+    clean(d.integrations);
+  } else if (t.dataset.en) { d.enrichment.fill = csv(t.value); if (!d.enrichment.fill.length) delete d.enrichment; }
+  changed();
+});
+$("formBox").addEventListener("click", e => {
+  const t = e.target, d = data;
+  if (!(t instanceof HTMLButtonElement)) return;
+  const ds = t.dataset;
+  if (t.id === "addField") { let n = "new_field", i = 1; while (d.fields[n]) n = "new_field" + (++i); d.fields[n] = { type: "string", description: "" }; }
+  else if (ds.delField) delete d.fields[ds.delField];
+  else if (t.id === "addTeam") { let n = "new_team", i = 1; while (d.teams[n]) n = "new_team" + (++i); d.teams[n] = { reps: [] }; }
+  else if (ds.delTeam) delete d.teams[ds.delTeam];
+  else if (t.id === "addRule") d.rules.push({ to: { queue: "fallback" }, label: "new rule" });
+  else if (ds.delRule !== undefined) d.rules.splice(+ds.delRule, 1);
+  else if (ds.up !== undefined && +ds.up > 0) { const i = +ds.up; [d.rules[i - 1], d.rules[i]] = [d.rules[i], d.rules[i - 1]]; }
+  else if (ds.down !== undefined && +ds.down < d.rules.length - 1) { const i = +ds.down; [d.rules[i + 1], d.rules[i]] = [d.rules[i], d.rules[i + 1]]; }
+  else if (ds.addCond !== undefined) { const r = d.rules[+ds.addCond]; r.when = r.when || {}; const n = fieldNames().find(x => !(x in r.when)) || "intent"; r.when[n] = ""; }
+  else if (ds.delCond !== undefined) { const r = d.rules[+t.closest("[data-rule]").dataset.rule], rows = toRows(r.when); rows.splice(+ds.delCond, 1); r.when = fromRows(rows); if (!Object.keys(r.when).length) delete r.when; }
+  else return;
+  rerender();
+});
+
+async function showTab(form) {
+  if (form) {
+    try { data = (await api("/to-form", { method: "POST", body: JSON.stringify({ yaml: $("yaml").value }) })).data; }
+    catch (e) { status("Fix the YAML before using the form: " + e.message, "bad"); return; }
+    renderForm();
+    status("Form edits rewrite the file without its comments.", "");
+  }
+  formOn = form;
+  $("formBox").hidden = !form; $("yaml").hidden = form;
+  $("tabForm").classList.toggle("on", form); $("tabYaml").classList.toggle("on", !form);
+}
+$("tabYaml").addEventListener("click", () => showTab(false));
+$("tabForm").addEventListener("click", () => showTab(true));
+
 load();
 </script>
 </body>

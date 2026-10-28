@@ -29,10 +29,12 @@ _scrub()  # before any test module imports code that reads settings
 
 
 @pytest.fixture(autouse=True)
-def _clean_settings(monkeypatch):
+def _clean_settings(monkeypatch, tmp_path):
     for var in list(os.environ):
         if var in SETTING_VARS or TEAM_VARS.fullmatch(var):
             monkeypatch.delenv(var)
+    # the real config/active_profile.txt must never leak into a test
+    monkeypatch.setenv("ACTIVE_PROFILE_FILE", str(tmp_path / "active_profile.txt"))
     get_settings.cache_clear()
     get_profile.cache_clear()
     yield

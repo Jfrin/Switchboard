@@ -50,6 +50,7 @@ class Profile:
         }
         self.rules: list[dict] = d.get("rules") or []
         self.fallback_queue: str = d.get("fallback_queue", "review")
+        self.sticky_reps: bool = bool(d.get("sticky_reps", True))
         self.enrich_fill: list[str] = (d.get("enrichment") or {}).get("fill") or []
         integ = d.get("integrations") or {}
         self.crm: bool = bool(integ.get("crm", False))
@@ -122,6 +123,9 @@ class Profile:
         for field in [*(integ.get("summary_fields") or []), integ.get("title_field")]:
             if field and field not in known:
                 raise self._err(f"integrations: '{field}' is not a known field")
+
+        if "sticky_reps" in d and not isinstance(d["sticky_reps"], bool):
+            raise self._err("'sticky_reps' must be true or false")
 
         rules = d.get("rules")
         if not rules:
@@ -308,16 +312,38 @@ def use_profile(profile: Profile):
         _override.reset(token)
 
 
-def get_profile() -> Profile:
-    """The active profile (PROFILE_PATH).
+NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 
-    Cached per file modification time, so saving the file (from the admin page or by hand)
+
+def active_path() -> str:
+    """Profile file in use: the name saved by the profile editor, else PROFILE_PATH."""
+    s = get_settings()
+    try:
+        name = Path(s.active_profile_file).read_text(encoding="utf-8").strip()
+    except OSError:
+        name = ""
+    if NAME.match(name):
+        candidate = Path(s.profile_path).parent / f"{name}.yaml"
+        if candidate.exists():
+            return str(candidate)
+    return s.profile_path
+
+
+def pin_profile(profile: Profile) -> None:
+    """Use this profile for the rest of the process (eval --profile)."""
+    _override.set(profile)
+
+
+def get_profile() -> Profile:
+    """The active profile (see active_path).
+
+    Cached per file modification time, so saving the file (from the editor or by hand)
     takes effect on the next message without a restart. get_profile.cache_clear() reloads it.
     """
     override = _override.get()
     if override is not None:
         return override
-    path = get_settings().profile_path
+    path = active_path()
     return _cached(path, os.stat(path).st_mtime_ns)
 
 

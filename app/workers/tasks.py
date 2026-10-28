@@ -1,6 +1,8 @@
 import logging
 import time
 
+from sqlalchemy import func, select
+
 from app.config import get_settings
 from app.db.models import LeadRecord, RoutingDecision
 from app.db.session import SessionLocal
@@ -14,6 +16,26 @@ from app.routing.round_robin import make_db_picker
 from app.workers.celery_app import celery_app
 
 log = logging.getLogger(__name__)
+
+
+def sticky_picker(db, sender: str, lead_id: str, base):
+    """Send a repeat sender to the rep they were last routed to, when that rep is in the team.
+
+    Falls back to the normal round-robin (which then advances its counter as usual).
+    """
+    previous = db.scalars(
+        select(LeadRecord)
+        .where(func.lower(LeadRecord.sender) == sender.lower())
+        .where(LeadRecord.id != lead_id, LeadRecord.status == "routed")
+        .order_by(LeadRecord.created_at.desc())
+        .limit(1)
+    ).first()
+    last_rep = (previous.decision or {}).get("rep") if previous else None
+
+    def pick(team: str, reps: list[str]) -> str:
+        return last_rep if last_rep in reps else base(team, reps)
+
+    return pick
 
 
 def run_pipeline(lead_id: str) -> None:
@@ -34,13 +56,16 @@ def run_pipeline(lead_id: str) -> None:
             if facts.get(field) in (None, ""):
                 facts[field] = enrichment.get(field)
 
+        pick_rep = make_db_picker(db)
+        if profile.sticky_reps:
+            pick_rep = sticky_picker(db, rec.sender, rec.id, pick_rep)
         decision = route(
             facts=facts,
             confidence=lead.confidence,
             refused=llm_model == REFUSED_MODEL,
             profile=profile,
             threshold=settings.confidence_threshold,
-            pick_rep=make_db_picker(db),
+            pick_rep=pick_rep,
         )
 
         title = (facts.get(profile.title_field or "") or lead.email or rec.sender) or "unknown"

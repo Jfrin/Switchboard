@@ -95,3 +95,38 @@ def list_leads(
     if rep:
         rows = [r for r in rows if (r.decision or {}).get("rep") == rep]
     return [_to_out(r) for r in rows]
+
+
+def _requeue(db: Session, rec: LeadRecord) -> None:
+    rec.status, rec.error = "queued", None
+    db.commit()
+    from app.workers.tasks import process_lead
+
+    process_lead.delay(rec.id)
+
+
+@router.post("/leads/retry-failed")
+def retry_failed(limit: int = Query(100, le=1000), db: Session = Depends(get_db)) -> dict:
+    """Failed leads are the dead-letter queue: this puts them back on the queue."""
+    rows = db.scalars(
+        select(LeadRecord)
+        .where(LeadRecord.status == "failed")
+        .order_by(LeadRecord.created_at)
+        .limit(limit)
+    ).all()
+    for rec in rows:
+        _requeue(db, rec)
+    return {"requeued": [r.id for r in rows]}
+
+
+@router.post("/leads/{lead_id}/retry", response_model=LeadAccepted)
+def retry_lead(lead_id: str, db: Session = Depends(get_db)) -> LeadAccepted:
+    rec = db.get(LeadRecord, lead_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="lead not found")
+    if rec.status != "failed":
+        raise HTTPException(
+            status_code=409, detail=f"only failed leads can be retried (is {rec.status})"
+        )
+    _requeue(db, rec)
+    return LeadAccepted(id=rec.id, status=rec.status)

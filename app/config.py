@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     confidence_threshold: float = 0.7
     # Which profile (what the AI reads and how items are routed) to run.
     profile_path: str = "config/profiles/sales.yaml"
+    # The profile editor's "make active" writes the chosen name here; it wins over PROFILE_PATH.
+    active_profile_file: str = "config/active_profile.txt"
     # Optional overrides for the profile file; empty means use the YAML value.
     routing_smb_reps: str = ""  # "smb-apac-1,smb-emea-1"
     routing_enterprise_reps: str = ""
